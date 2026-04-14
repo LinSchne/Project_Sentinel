@@ -1,0 +1,11 @@
+streamlit
+pandas
+openpyxl
+pdfplumber
+pypdf
+python-dotenv
+rapidfuzz
+pydantic
+plotly
+openai
+pytest

@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+
+# macOS
+.DS_Store
+
+# Environment variables
+.env
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Local data / uploads
+data/raw/*
+!data/raw/.gitkeep
+
+data/reference/*
+!data/reference/.gitkeep
+
+data/processed/*
+!data/processed/.gitkeep
+
+uploads/*
+!uploads/.gitkeep
+
+# Testing / cache
+.pytest_cache/
+.coverage
+
+# IDE
+.vscode/settings.json
