@@ -27,6 +27,21 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Local LLM with Ollama
+
+The prototype can extract notice fields with a local Ollama model.
+
+Example setup:
+
+```bash
+cp .env.example .env
+ollama pull llama3.1:8b-instruct-q6_K
+ollama serve
+streamlit run app.py
+```
+
+If Ollama is unavailable, the app falls back to rule-based extraction.
+
 ## Contact
 Linus V. Schneeberger  
 linus.schneeberger@gmail.com
