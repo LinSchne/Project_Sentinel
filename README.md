@@ -1,11 +1,11 @@
 # Project Sentinel
 
-Treasury Operations Automation tool for Private Equity Capital Calls.
+Project Sentinel is a web based Treasury Operations tool built to automate the handling of Private Equity capital calls.
 
 ## Scope
-This project automates the handling of capital call notices through:
+The project covers the core steps of the capital call workflow:
 - PDF ingestion
-- AI based data extraction
+- AI driven data extraction
 - commitment validation
 - wire instruction verification
 - approval workflow
@@ -25,3 +25,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 streamlit run app.py
+```
+
+## Contact
+Linus V. Schneeberger  
+linus.schneeberger@gmail.com
