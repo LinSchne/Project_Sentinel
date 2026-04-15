@@ -194,6 +194,7 @@ def render_record_summary(record, title):
 
 def clear_approved_wire_state():
     for key in [
+        "approved_wire_show_add_dialog",
         "approved_wire_pending_record",
         "approved_wire_is_duplicate",
         "approved_wire_duplicate_details",
@@ -218,6 +219,11 @@ def clear_uploaded_notice_state():
         "validation_feedback",
         "uploaded_file",
         "show_notice_reset_dialog",
+        "uploaded_notice_edit_id",
+        "executed_email_notice_id",
+        "executed_calls_last_opened_id",
+        "executed_email_sent_ids",
+        "executed_email_sent_at",
     ]:
         st.session_state.pop(key, None)
 
@@ -290,6 +296,153 @@ def format_currency_display(value, currency="EUR"):
     return f"{currency} {format_amount_input(value)}"
 
 
+def compact_iban_display(value):
+    if value in (None, "") or pd.isna(value):
+        return "-"
+    text = str(value).strip()
+    if len(text) <= 18:
+        return text
+    return f"{text[:10]} ... {text[-6:]}"
+
+
+def open_uploaded_notice_editor_for_checked_rows(checked_rows, notices_df):
+    if len(checked_rows) != 1:
+        return False
+    row_position = checked_rows[0]
+    if row_position >= len(notices_df):
+        return False
+    st.session_state["uploaded_notice_edit_id"] = str(notices_df.iloc[row_position]["id"])
+    return True
+
+
+def normalize_lookup_text(value):
+    if value in (None, "") or pd.isna(value):
+        return ""
+    return " ".join(str(value).strip().upper().split())
+
+
+def normalize_lookup_iban(value):
+    if value in (None, "") or pd.isna(value):
+        return ""
+    return "".join(str(value).strip().upper().split())
+
+
+def find_matching_approved_wire_record(record, approved_wires_df):
+    if approved_wires_df.empty:
+        return None
+
+    active_wires_df = approved_wires_df.copy()
+    if "Status" in active_wires_df.columns:
+        active_wires_df = active_wires_df[
+            active_wires_df["Status"].astype(str).str.strip().eq("Active")
+        ]
+
+    if active_wires_df.empty:
+        return None
+
+    fund_name = normalize_lookup_text(record.get("fund_name", ""))
+    currency = normalize_lookup_text(record.get("currency", ""))
+    iban = normalize_lookup_iban(record.get("iban", ""))
+    beneficiary_bank = normalize_lookup_text(record.get("beneficiary_bank", ""))
+
+    if iban and "IBAN / Account Number" in active_wires_df.columns:
+        iban_matches = active_wires_df[
+            active_wires_df["IBAN / Account Number"].apply(normalize_lookup_iban).eq(iban)
+        ]
+        if currency and not iban_matches.empty and "Currency" in iban_matches.columns:
+            currency_matches = iban_matches[
+                iban_matches["Currency"].apply(normalize_lookup_text).eq(currency)
+            ]
+            if not currency_matches.empty:
+                return currency_matches.iloc[0].to_dict()
+        if not iban_matches.empty:
+            return iban_matches.iloc[0].to_dict()
+
+    if not fund_name:
+        if beneficiary_bank and "Beneficiary Bank" in active_wires_df.columns:
+            bank_matches = active_wires_df[
+                active_wires_df["Beneficiary Bank"].apply(normalize_lookup_text).eq(beneficiary_bank)
+            ]
+            if currency and not bank_matches.empty and "Currency" in bank_matches.columns:
+                currency_matches = bank_matches[
+                    bank_matches["Currency"].apply(normalize_lookup_text).eq(currency)
+                ]
+                if not currency_matches.empty:
+                    return currency_matches.iloc[0].to_dict()
+            if not bank_matches.empty:
+                return bank_matches.iloc[0].to_dict()
+        return None
+
+    candidate_df = active_wires_df[
+        active_wires_df["Fund Name"].apply(normalize_lookup_text).eq(fund_name)
+    ]
+
+    if currency and not candidate_df.empty and "Currency" in candidate_df.columns:
+        currency_matches = candidate_df[
+            candidate_df["Currency"].apply(normalize_lookup_text).eq(currency)
+        ]
+        if not currency_matches.empty:
+            return currency_matches.iloc[0].to_dict()
+
+    if not candidate_df.empty:
+        return candidate_df.iloc[0].to_dict()
+
+    fallback_df = active_wires_df[
+        active_wires_df["Fund Name"].apply(
+            lambda value: fund_name in normalize_lookup_text(value)
+            or normalize_lookup_text(value) in fund_name
+        )
+    ]
+
+    if currency and not fallback_df.empty and "Currency" in fallback_df.columns:
+        currency_matches = fallback_df[
+            fallback_df["Currency"].apply(normalize_lookup_text).eq(currency)
+        ]
+        if not currency_matches.empty:
+            return currency_matches.iloc[0].to_dict()
+
+    if not fallback_df.empty:
+        return fallback_df.iloc[0].to_dict()
+
+    return None
+
+
+def enrich_record_with_approved_wire(record, approved_wires_df):
+    enriched_record = dict(record)
+    if enriched_record.get("iban") and enriched_record.get("swift"):
+        return enriched_record
+
+    matched_wire = find_matching_approved_wire_record(enriched_record, approved_wires_df)
+    if not matched_wire:
+        return enriched_record
+
+    if not enriched_record.get("iban"):
+        enriched_record["iban"] = matched_wire.get("IBAN / Account Number", "")
+    if not enriched_record.get("swift"):
+        enriched_record["swift"] = matched_wire.get("Swift/BIC", "")
+
+    return enriched_record
+
+
+def build_approved_wire_suggestions(record, approved_wires_df):
+    matched_wire = find_matching_approved_wire_record(record, approved_wires_df)
+    if not matched_wire:
+        return {}
+
+    suggestions = {}
+    if not str(record.get("swift", "")).strip() and str(matched_wire.get("Swift/BIC", "")).strip():
+        suggestions["SWIFT/BIC"] = matched_wire.get("Swift/BIC", "")
+    if not str(record.get("beneficiary_bank", "")).strip() and str(
+        matched_wire.get("Beneficiary Bank", "")
+    ).strip():
+        suggestions["Beneficiary Bank"] = matched_wire.get("Beneficiary Bank", "")
+    if not str(record.get("iban", "")).strip() and str(
+        matched_wire.get("IBAN / Account Number", "")
+    ).strip():
+        suggestions["IBAN"] = matched_wire.get("IBAN / Account Number", "")
+    return suggestions
+
+
 def build_executed_email_context(row):
     due_date = row.get("due_date") or row.get("value_date") or row.get("executed_at") or ""
     return {
@@ -303,18 +456,31 @@ def build_executed_email_context(row):
     }
 
 
-def open_executed_email_for_selected_row(selected_rows, executed_df):
-    if not selected_rows:
+def open_executed_email_for_checked_rows(checked_rows, executed_df):
+    if len(checked_rows) != 1:
         return False
-    row_position = selected_rows[0]
+    row_position = checked_rows[0]
     if row_position >= len(executed_df):
         return False
     selected_notice_id = executed_df.iloc[row_position]["id"]
-    if st.session_state.get("executed_calls_last_opened_id") == selected_notice_id:
-        return False
     st.session_state["executed_email_notice_id"] = selected_notice_id
     st.session_state["executed_calls_last_opened_id"] = selected_notice_id
     return True
+
+
+def mark_executed_email_as_sent(notice_id):
+    sent_notice_ids = set(st.session_state.get("executed_email_sent_ids", []))
+    sent_notice_ids.add(str(notice_id))
+    st.session_state["executed_email_sent_ids"] = sorted(sent_notice_ids)
+    sent_timestamps = dict(st.session_state.get("executed_email_sent_at", {}))
+    sent_timestamps[str(notice_id)] = datetime.now(ZoneInfo("Europe/Zurich")).strftime(
+        "%d.%m.%Y %H:%M"
+    )
+    st.session_state["executed_email_sent_at"] = sent_timestamps
+    st.session_state["executed_calls_table_nonce"] = (
+        st.session_state.get("executed_calls_table_nonce", 0) + 1
+    )
+    st.session_state.pop("executed_email_notice_id", None)
 
 
 @st.cache_data(show_spinner=False)
@@ -368,6 +534,78 @@ def approved_wire_confirmation_dialog(master_df, managed_workbook):
     with cancel_col:
         if st.button("Cancel", use_container_width=True):
             clear_approved_wire_state()
+            st.rerun()
+
+
+@st.dialog("Add New Approved Wire")
+def approved_wire_add_dialog(master_df):
+    st.caption("Please enter the new approved wire details.")
+
+    with st.form("approved_wire_add_dialog_form", clear_on_submit=False):
+        add_col1, add_col2, add_col3 = st.columns(3)
+
+        with add_col1:
+            fund_name = st.text_input("Fund Name", key="approved_wire_fund_name")
+            beneficiary_bank = st.text_input(
+                "Beneficiary Bank",
+                key="approved_wire_beneficiary_bank",
+            )
+
+        with add_col2:
+            swift_bic = st.text_input("Swift/BIC", key="approved_wire_swift_bic")
+            iban_account_number = st.text_input(
+                "IBAN / Account Number",
+                key="approved_wire_iban_account_number",
+            )
+
+        with add_col3:
+            currency_choice = st.selectbox(
+                "Currency",
+                options=COMMON_CURRENCY_CODES,
+                key="approved_wire_currency_choice",
+            )
+            currency_other = ""
+            if currency_choice == "Other":
+                currency_other = st.text_input(
+                    "Other Currency Code",
+                    key="approved_wire_currency_other",
+                    placeholder="e.g. THB",
+                )
+            status = st.selectbox(
+                "Status",
+                options=["Active", "Inactive"],
+                key="approved_wire_status",
+            )
+
+        action_col1, action_col2 = st.columns(2)
+        submitted = action_col1.form_submit_button("Review Record", use_container_width=True)
+        canceled = action_col2.form_submit_button("Cancel", use_container_width=True)
+
+        if canceled:
+            st.session_state.pop("approved_wire_show_add_dialog", None)
+            reset_approved_wire_form()
+            st.rerun()
+
+        if submitted:
+            currency = (
+                currency_other.strip().upper()
+                if currency_choice == "Other"
+                else currency_choice
+            )
+            new_record = {
+                "Fund Name": fund_name,
+                "Beneficiary Bank": beneficiary_bank,
+                "Swift/BIC": swift_bic,
+                "IBAN / Account Number": iban_account_number,
+                "Currency": currency,
+                "Status": status,
+            }
+
+            duplicate_details = find_duplicate_record(master_df, new_record)
+            st.session_state["approved_wire_pending_record"] = new_record
+            st.session_state["approved_wire_is_duplicate"] = duplicate_details is not None
+            st.session_state["approved_wire_duplicate_details"] = duplicate_details
+            st.session_state.pop("approved_wire_show_add_dialog", None)
             st.rerun()
 
 
@@ -448,15 +686,156 @@ def uploaded_notices_reset_dialog():
 @st.dialog("Payment Confirmation Email")
 def executed_email_dialog(notice):
     email_text = generate_payment_confirmation_email(notice or {})
+    st.caption("Please review all the information.")
     st.text_area(
         "Copyable email template",
         value=email_text,
         height=260,
         key=f"executed_email_dialog_{notice.get('id', 'notice')}",
     )
-    if st.button("Close", use_container_width=True):
-        st.session_state.pop("executed_email_notice_id", None)
-        st.rerun()
+    action_col1, action_col2 = st.columns(2)
+    with action_col1:
+        if st.button("Copy and Mark as Sent", use_container_width=True, type="primary"):
+            mark_executed_email_as_sent(notice.get("id", ""))
+            st.rerun()
+    with action_col2:
+        if st.button("Close", use_container_width=True):
+            st.session_state.pop("executed_email_notice_id", None)
+            st.rerun()
+
+
+@st.dialog("Review Extracted Data")
+def review_notice_dialog(review_notice):
+    st.info(
+        "Please verify the extracted data. If everything is correct, accept it. If something is wrong, edit the fields below and then accept."
+    )
+
+    editable = editable_notice_payload(review_notice)
+
+    with st.form("notice_review_form", clear_on_submit=False):
+        review_col1, review_col2 = st.columns(2)
+
+        with review_col1:
+            reviewed_fund_name = st.text_input("Fund Name", value=editable["fund_name"])
+            reviewed_amount = st.text_input(
+                "Amount",
+                value=format_amount_input(editable["amount"]),
+            )
+            reviewed_currency = st.text_input("Currency", value=editable["currency"])
+            reviewed_due_date = st.text_input(
+                "Due Date",
+                value=editable["due_date"].strftime("%d.%m.%Y")
+                if pd.notna(editable["due_date"])
+                else "",
+            )
+
+        with review_col2:
+            reviewed_beneficiary_bank = st.text_input(
+                "Beneficiary Bank",
+                value=editable["beneficiary_bank"],
+            )
+            reviewed_iban = st.text_input("IBAN", value=editable["iban"])
+            reviewed_swift = st.text_input("SWIFT/BIC", value=editable["swift"])
+
+        review_action_col1, review_action_col2 = st.columns(2)
+        accept_clicked = review_action_col1.form_submit_button(
+            "Accept Notice Data",
+            use_container_width=True,
+        )
+        delete_clicked = review_action_col2.form_submit_button(
+            "Delete Notice",
+            use_container_width=True,
+        )
+
+        if accept_clicked:
+            state = workflow_state()
+            updated_notice = accept_notice_record(
+                review_notice,
+                {
+                    "fund_name": reviewed_fund_name,
+                    "amount": parse_amount_input(reviewed_amount),
+                    "currency": reviewed_currency,
+                    "due_date": pd.to_datetime(
+                        reviewed_due_date,
+                        dayfirst=True,
+                        errors="coerce",
+                    ),
+                    "beneficiary_bank": reviewed_beneficiary_bank,
+                    "iban": reviewed_iban,
+                    "swift": reviewed_swift,
+                },
+            )
+            upsert_notice(state, updated_notice)
+            persist_workflow_state(state)
+            st.session_state["current_notice_id"] = updated_notice["id"]
+            st.session_state["upload_notice_feedback"] = (
+                "Notice data accepted and moved to Validation."
+            )
+            st.rerun()
+
+        if delete_clicked:
+            state = workflow_state()
+            updated_state = delete_notice_by_id(state, review_notice["id"])
+            persist_workflow_state(updated_state)
+            st.session_state.pop("current_notice_id", None)
+            st.session_state["upload_notice_feedback"] = "Review notice deleted."
+            st.rerun()
+
+
+@st.dialog("Edit Uploaded Notice")
+def edit_uploaded_notice_dialog(notice):
+    editable = editable_notice_payload(notice)
+
+    with st.form("edit_uploaded_notice_form", clear_on_submit=False):
+        edit_col1, edit_col2 = st.columns(2)
+
+        with edit_col1:
+            edited_fund_name = st.text_input("Fund Name", value=editable["fund_name"])
+            edited_amount = st.text_input("Amount", value=format_amount_input(editable["amount"]))
+            edited_currency = st.text_input("Currency", value=editable["currency"])
+            edited_due_date = st.text_input(
+                "Due Date",
+                value=editable["due_date"].strftime("%d.%m.%Y")
+                if pd.notna(editable["due_date"])
+                else "",
+            )
+
+        with edit_col2:
+            edited_bank = st.text_input("Bank", value=editable["beneficiary_bank"] or "-")
+            edited_iban = st.text_input("IBAN", value=editable["iban"] or "-")
+            edited_swift = st.text_input("SWIFT/BIC", value=editable["swift"] or "-")
+
+        save_col, cancel_col = st.columns(2)
+        save_clicked = save_col.form_submit_button("Save Notice Changes", use_container_width=True)
+        cancel_clicked = cancel_col.form_submit_button("Close", use_container_width=True)
+
+        if save_clicked:
+            state = workflow_state()
+            updated_notice = dict(notice)
+            updated_notice.update(
+                {
+                    "fund_name": edited_fund_name,
+                    "amount": parse_amount_input(edited_amount),
+                    "currency": edited_currency,
+                    "due_date": pd.to_datetime(
+                        edited_due_date,
+                        dayfirst=True,
+                        errors="coerce",
+                    ),
+                    "beneficiary_bank": "" if edited_bank.strip() == "-" else edited_bank.strip(),
+                    "iban": "" if edited_iban.strip() == "-" else edited_iban.strip(),
+                    "swift": "" if edited_swift.strip() == "-" else edited_swift.strip(),
+                }
+            )
+            upsert_notice(state, updated_notice)
+            persist_workflow_state(state)
+            st.session_state["upload_notice_feedback"] = "Uploaded notice updated successfully."
+            st.session_state.pop("uploaded_notice_edit_id", None)
+            st.rerun()
+
+        if cancel_clicked:
+            st.session_state.pop("uploaded_notice_edit_id", None)
+            st.rerun()
 
 st.set_page_config(
     page_title="Project Sentinel",
@@ -475,6 +854,23 @@ st.markdown(
             padding-left: 2rem;
             padding-right: 2rem;
             overflow: visible !important;
+        }
+
+        div[data-testid="stDialog"] div[role="dialog"] {
+            width: min(1100px, 92vw);
+        }
+
+        div[data-testid="stFileUploader"] > section {
+            padding: 0.95rem 1rem;
+            min-height: 5.25rem;
+            border-radius: 18px;
+        }
+
+        div[data-testid="stFileUploaderDropzone"] {
+            padding: 0.7rem 0.85rem;
+            min-height: 3.9rem;
+            display: flex;
+            align-items: center;
         }
 
         section[data-testid="stSidebar"] {
@@ -618,8 +1014,16 @@ st.markdown(
             background: #ffffff;
             border: 1px solid #e7ebf3;
             border-radius: 16px;
-            padding: 20px 18px;
+            padding: 18px 18px;
+            min-height: 180px;
             height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .mini-card-muted {
+            background: #f5f6f8;
+            border-color: #dde2eb;
         }
 
         .mini-label {
@@ -633,13 +1037,14 @@ st.markdown(
             font-size: 1.8rem;
             font-weight: 800;
             line-height: 1.1;
-            margin-bottom: 0.2rem;
+            margin-bottom: 0.4rem;
         }
 
         .mini-note {
             color: #6b7280;
             font-size: 0.92rem;
             line-height: 1.45;
+            margin-top: auto;
         }
 
         .content-card {
@@ -648,79 +1053,6 @@ st.markdown(
             border-radius: 18px;
             padding: 22px 24px;
             margin-top: 0.5rem;
-        }
-
-        .executed-table-wrap {
-            margin-top: 0.4rem;
-            border: 1px solid #dfe5f0;
-            border-radius: 16px;
-            overflow: hidden;
-            background: #ffffff;
-        }
-
-        .executed-table-header {
-            background: #f7f9fc;
-            border-bottom: 1px solid #e6ebf3;
-            padding: 0;
-        }
-
-        .executed-table-row {
-            border-bottom: 1px solid #eef2f7;
-            background: #ffffff;
-        }
-
-        .executed-table-row:last-child {
-            border-bottom: none;
-        }
-
-        .executed-table-wrap [data-testid="stHorizontalBlock"] {
-            gap: 0;
-        }
-
-        .executed-header-cell,
-        .executed-data-cell,
-        .executed-button-cell {
-            min-height: 3.9rem;
-            padding: 0.78rem 0.9rem;
-            display: flex;
-            align-items: center;
-            border-right: 1px solid #eef2f7;
-        }
-
-        .executed-header-cell:last-child,
-        .executed-data-cell:last-child,
-        .executed-button-cell:last-child {
-            border-right: none;
-        }
-
-        .executed-button-cell {
-            justify-content: center;
-        }
-
-        .executed-col-label {
-            color: #7b8496;
-            font-size: 0.8rem;
-            font-weight: 700;
-            line-height: 1.2;
-        }
-
-        .executed-col-value {
-            color: #1f2a44;
-            font-size: 1rem;
-            line-height: 1.4;
-            word-break: break-word;
-        }
-
-        .executed-table-wrap [data-testid="stButton"] {
-            width: 100%;
-        }
-
-        .executed-table-wrap [data-testid="stButton"] > button {
-            min-height: 2.35rem;
-            padding: 0.25rem 0.8rem;
-            border-radius: 10px;
-            font-size: 0.95rem;
-            font-weight: 600;
         }
 
     </style>
@@ -826,7 +1158,7 @@ if page == "Overview":
     with metric_col4:
         st.markdown(
             f"""
-            <div class="mini-card">
+            <div class="mini-card mini-card-muted">
                 <div class="mini-label">Remaining Open</div>
                 <div class="mini-value" style="font-size:1.55rem;">{metrics["Remaining Open"]}</div>
                 <div class="mini-note">Open commitment still available.</div>
@@ -914,6 +1246,8 @@ elif page == "Approved Wires":
 
     if st.session_state.get("approved_wire_pending_record"):
         approved_wire_confirmation_dialog(master_df, managed_workbook)
+    if st.session_state.get("approved_wire_show_add_dialog"):
+        approved_wire_add_dialog(master_df)
     if st.session_state.get("approved_wire_show_reset_dialog"):
         approved_wires_reset_dialog(source_workbook, managed_workbook)
 
@@ -1021,7 +1355,7 @@ elif page == "Approved Wires":
         f"Total wires: {len(filtered_df)} | Active: {active_count} | Inactive: {inactive_count}"
     )
 
-    action_col1, action_col2, action_col3 = st.columns([1, 1, 3])
+    action_col1, action_col2, action_col3, _action_spacer = st.columns([1, 1, 1, 2])
 
     with action_col1:
         if st.button("Save Changes", use_container_width=True):
@@ -1035,11 +1369,14 @@ elif page == "Approved Wires":
             st.session_state["approved_wire_show_reset_dialog"] = True
             st.rerun()
 
+    with action_col3:
+        if st.button("Add New Record", use_container_width=True):
+            st.session_state["approved_wire_show_add_dialog"] = True
+            st.rerun()
+
     feedback_message = st.session_state.pop("approved_wire_feedback", None)
     if feedback_message:
         st.success(feedback_message)
-
-    st.markdown("### Add New Record")
 
     if "approved_wire_currency" not in st.session_state:
         st.session_state["approved_wire_currency"] = "EUR"
@@ -1049,65 +1386,6 @@ elif page == "Approved Wires":
         st.session_state["approved_wire_currency_other"] = ""
     if "approved_wire_status" not in st.session_state:
         st.session_state["approved_wire_status"] = "Active"
-
-    with st.form("approved_wire_add_form", clear_on_submit=False):
-        add_col1, add_col2, add_col3 = st.columns(3)
-
-        with add_col1:
-            fund_name = st.text_input("Fund Name", key="approved_wire_fund_name")
-            beneficiary_bank = st.text_input(
-                "Beneficiary Bank",
-                key="approved_wire_beneficiary_bank",
-            )
-
-        with add_col2:
-            swift_bic = st.text_input("Swift/BIC", key="approved_wire_swift_bic")
-            iban_account_number = st.text_input(
-                "IBAN / Account Number",
-                key="approved_wire_iban_account_number",
-            )
-
-        with add_col3:
-            currency_choice = st.selectbox(
-                "Currency",
-                options=COMMON_CURRENCY_CODES,
-                key="approved_wire_currency_choice",
-            )
-            currency_other = ""
-            if currency_choice == "Other":
-                currency_other = st.text_input(
-                    "Other Currency Code",
-                    key="approved_wire_currency_other",
-                    placeholder="e.g. THB",
-                )
-            status = st.selectbox(
-                "Status",
-                options=["Active", "Inactive"],
-                key="approved_wire_status",
-            )
-
-        submitted = st.form_submit_button("Add Record", use_container_width=True)
-
-        if submitted:
-            currency = (
-                currency_other.strip().upper()
-                if currency_choice == "Other"
-                else currency_choice
-            )
-            new_record = {
-                "Fund Name": fund_name,
-                "Beneficiary Bank": beneficiary_bank,
-                "Swift/BIC": swift_bic,
-                "IBAN / Account Number": iban_account_number,
-                "Currency": currency,
-                "Status": status,
-            }
-
-            duplicate_details = find_duplicate_record(master_df, new_record)
-            st.session_state["approved_wire_pending_record"] = new_record
-            st.session_state["approved_wire_is_duplicate"] = duplicate_details is not None
-            st.session_state["approved_wire_duplicate_details"] = duplicate_details
-            st.rerun()
 
 elif page == "Commitment Tracker":
     source_workbook = BASE_DIR / "data" / "reference" / "IO_Case_study_Capital_Calls.xlsx"
@@ -1131,7 +1409,7 @@ elif page == "Commitment Tracker":
 
     render_page_hero(
         "Commitment Tracker",
-        "Track commitments, upcoming capital calls, and executed payments in one place.",
+        "Track commitments, upcoming capital calls & executed payments in one place.",
         eyebrow="",
     )
 
@@ -1176,7 +1454,7 @@ elif page == "Commitment Tracker":
     with metric_col4:
         st.markdown(
             f"""
-            <div class="mini-card">
+            <div class="mini-card mini-card-muted">
                 <div class="mini-label">Remaining Open</div>
                 <div class="mini-value" style="font-size:1.55rem;">{metrics["Remaining Open"]}</div>
                 <div class="mini-note">Open commitment still available.</div>
@@ -1184,13 +1462,6 @@ elif page == "Commitment Tracker":
             """,
             unsafe_allow_html=True,
         )
-
-    st.markdown("<div style='height: 0.8rem;'></div>", unsafe_allow_html=True)
-    reset_col1, reset_col2 = st.columns([1, 5])
-    with reset_col1:
-        if st.button("Reset to Source", key="commitment_tracker_reset_button", use_container_width=True):
-            st.session_state["commitment_tracker_show_reset_dialog"] = True
-            st.rerun()
 
     st.markdown("### Filters")
     filter_col1, filter_col2, filter_col3 = st.columns([1, 1, 1.35])
@@ -1287,6 +1558,13 @@ elif page == "Commitment Tracker":
             f"Executed calls: {len(executed_df)} | Total executed amount: {format_currency_display(executed_total)}"
         )
 
+    st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
+    reset_col1, reset_col2 = st.columns([1, 5])
+    with reset_col1:
+        if st.button("Reset to Source", key="commitment_tracker_reset_button", use_container_width=True):
+            st.session_state["commitment_tracker_show_reset_dialog"] = True
+            st.rerun()
+
 elif page == "Upload Notice":
     render_page_hero(
         "Upload Notice",
@@ -1345,89 +1623,17 @@ elif page == "Upload Notice":
             review_notice = get_notice_by_id(state, review_notices_df.iloc[0]["id"])
 
         if review_notice:
-            st.markdown("### Review Extracted Data")
-            st.info(
-                "Please verify the extracted data. If everything is correct, accept it. If something is wrong, edit the fields below and then accept."
-            )
-
-            editable = editable_notice_payload(review_notice)
-
-            with st.form("notice_review_form", clear_on_submit=False):
-                review_col1, review_col2 = st.columns(2)
-
-                with review_col1:
-                    reviewed_fund_name = st.text_input("Fund Name", value=editable["fund_name"])
-                    reviewed_amount = st.text_input(
-                        "Amount",
-                        value=format_amount_input(editable["amount"]),
-                    )
-                    reviewed_currency = st.text_input("Currency", value=editable["currency"])
-                    reviewed_due_date = st.text_input(
-                        "Due Date",
-                        value=editable["due_date"].strftime("%d.%m.%Y")
-                        if pd.notna(editable["due_date"])
-                        else "",
-                    )
-
-                with review_col2:
-                    reviewed_beneficiary_bank = st.text_input(
-                        "Beneficiary Bank",
-                        value=editable["beneficiary_bank"],
-                    )
-                    reviewed_iban = st.text_input("IBAN", value=editable["iban"])
-                    reviewed_swift = st.text_input("SWIFT/BIC", value=editable["swift"])
-
-                review_action_col1, review_action_col2 = st.columns(2)
-                accept_clicked = review_action_col1.form_submit_button(
-                    "Accept Notice Data",
-                    use_container_width=True,
-                )
-                delete_clicked = review_action_col2.form_submit_button(
-                    "Delete Notice",
-                    use_container_width=True,
-                )
-
-                if accept_clicked:
-                    updated_notice = accept_notice_record(
-                        review_notice,
-                        {
-                            "fund_name": reviewed_fund_name,
-                            "amount": parse_amount_input(reviewed_amount),
-                            "currency": reviewed_currency,
-                            "due_date": pd.to_datetime(
-                                reviewed_due_date,
-                                dayfirst=True,
-                                errors="coerce",
-                            ),
-                            "beneficiary_bank": reviewed_beneficiary_bank,
-                            "iban": reviewed_iban,
-                            "swift": reviewed_swift,
-                        },
-                    )
-                    upsert_notice(state, updated_notice)
-                    persist_workflow_state(state)
-                    st.session_state["current_notice_id"] = updated_notice["id"]
-                    st.session_state["upload_notice_feedback"] = (
-                        "Notice data accepted and moved to Validation."
-                    )
-                    st.rerun()
-
-                if delete_clicked:
-                    updated_state = delete_notice_by_id(state, review_notice["id"])
-                    persist_workflow_state(updated_state)
-                    st.session_state.pop("current_notice_id", None)
-                    st.session_state["upload_notice_feedback"] = "Review notice deleted."
-                    st.rerun()
-
-    notice_action_col1, notice_action_col2 = st.columns([1, 4])
-    with notice_action_col1:
-        if st.button("Delete All Notices", use_container_width=True):
-            st.session_state["show_notice_reset_dialog"] = True
-            st.rerun()
+            review_notice_dialog(review_notice)
 
     notices_df = notices_to_dataframe(state.get("notices", []), statuses=["uploaded", "validated", "executed"])
+    if st.session_state.get("uploaded_notice_edit_id") and not notices_df.empty:
+        selected_uploaded_notice = get_notice_by_id(state, st.session_state["uploaded_notice_edit_id"])
+        if selected_uploaded_notice:
+            edit_uploaded_notice_dialog(selected_uploaded_notice)
+
     if not notices_df.empty:
         upload_display_df = notices_df.copy()
+        upload_display_df["Select"] = False
         if "amount" in upload_display_df.columns:
             upload_display_df["amount"] = upload_display_df.apply(
                 lambda row: (
@@ -1444,25 +1650,66 @@ elif page == "Upload Notice":
             upload_display_df["due_date"] = pd.to_datetime(
                 upload_display_df["due_date"], errors="coerce"
             ).dt.strftime("%d.%m.%Y")
+        for source_col, display_col in [
+            ("beneficiary_bank", "bank"),
+            ("iban", "iban"),
+            ("swift", "swift"),
+        ]:
+            if source_col in upload_display_df.columns:
+                upload_display_df[display_col] = upload_display_df[source_col].apply(
+                    lambda value: "-" if value in (None, "") or pd.isna(value) else str(value)
+                )
+            else:
+                upload_display_df[display_col] = "-"
+        upload_display_df["iban_short"] = upload_display_df["iban"].apply(compact_iban_display)
         preview_columns = [
             col
-            for col in ["source_filename", "fund_name", "amount", "currency", "due_date", "status"]
+            for col in ["Select", "fund_name", "amount", "bank", "iban_short", "swift", "due_date", "status"]
             if col in upload_display_df.columns
         ]
         st.markdown("### Uploaded Notices")
-        st.dataframe(
-            upload_display_df[preview_columns],
+        upload_table_df = upload_display_df[preview_columns].rename(
+            columns={
+                "Select": "Select",
+                "fund_name": "Fund Name",
+                "amount": "Amount",
+                "bank": "Bank",
+                "iban_short": "IBAN",
+                "swift": "SWIFT",
+                "due_date": "Due",
+                "status": "Status",
+            }
+        )
+        edited_upload_df = st.data_editor(
+            upload_table_df,
             use_container_width=True,
             hide_index=True,
             column_config={
-                "source_filename": "Source File",
-                "fund_name": "Fund Name",
-                "amount": "Amount",
-                "currency": "Currency",
-                "due_date": "Due Date",
-                "status": "Status",
+                "Select": st.column_config.CheckboxColumn("Select", width="small"),
+                "Fund Name": st.column_config.TextColumn("Fund Name", disabled=True, width="medium"),
+                "Amount": st.column_config.TextColumn("Amount", disabled=True, width="small"),
+                "Bank": st.column_config.TextColumn("Bank", disabled=True, width="medium"),
+                "IBAN": st.column_config.TextColumn("IBAN", disabled=True, width="medium"),
+                "SWIFT": st.column_config.TextColumn("SWIFT", disabled=True, width="small"),
+                "Due": st.column_config.TextColumn("Due", disabled=True, width="small"),
+                "Status": st.column_config.TextColumn("Status", disabled=True, width="small"),
             },
+            disabled=["Fund Name", "Amount", "Bank", "IBAN", "SWIFT", "Due", "Status"],
+            key="uploaded_notices_editor",
         )
+
+        checked_rows = edited_upload_df.index[edited_upload_df["Select"]].tolist()
+        table_action_col1, table_action_col2, table_action_col3 = st.columns([1, 1, 3])
+        with table_action_col1:
+            if st.button("Edit Selected Notice", use_container_width=True):
+                if len(checked_rows) != 1:
+                    st.warning("Please select exactly one notice.")
+                elif open_uploaded_notice_editor_for_checked_rows(checked_rows, notices_df.reset_index(drop=True)):
+                    st.rerun()
+        with table_action_col2:
+            if st.button("Delete All Notices", use_container_width=True):
+                st.session_state["show_notice_reset_dialog"] = True
+                st.rerun()
 
 elif page == "Validation":
     render_page_hero(
@@ -1516,12 +1763,30 @@ elif page == "Validation":
             dashboard_data = load_commitment_dashboard(commitment_workbook)
             dashboard_data = apply_workflow_updates(dashboard_data, state.get("notices", []))
             approved_wires_df = load_approved_wires(approved_source, approved_managed)
+            approved_wire_suggestions = build_approved_wire_suggestions(
+                selected_notice,
+                approved_wires_df,
+            )
 
             validation_result = validate_notice(
                 selected_notice,
                 dashboard_data.tracker_df,
                 approved_wires_df,
             )
+
+            if approved_wire_suggestions:
+                st.markdown(
+                    """
+                    <div style="background:#fff3cd;border:1px solid #ffe69c;color:#7a5a00;
+                                border-radius:12px;padding:0.8rem 1rem;margin:0.9rem 0 1rem 0;
+                                font-size:0.95rem;">
+                        Additional reference data was found in Approved Wires. Please review the suggested fields below.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                render_record_summary(approved_wire_suggestions, "Suggested from Approved Wires")
+
             render_validation_summary(validation_result)
 
             commitment_check = validation_result["commitment_check"]
@@ -1547,22 +1812,27 @@ elif page == "Validation":
                 else:
                     st.write("No approved wire match found.")
 
+            approval_allowed = validation_result["overall_status"] == "pass"
+            if not approval_allowed:
+                st.warning("Approval is blocked until both checks pass.")
+
             action_col1, action_col2, action_col3 = st.columns([1, 1, 2])
             with action_col1:
-                if st.button("Approve and Execute", use_container_width=True):
-                    if validation_result["overall_status"] != "pass":
-                        st.error("Approval is blocked until both validations pass.")
-                    else:
-                        selected_notice["investor"] = commitment_check.get("investor", "")
-                        selected_notice = set_notice_validation(selected_notice, validation_result)
-                        selected_notice = approve_notice(selected_notice)
-                        upsert_notice(state, selected_notice)
-                        persist_workflow_state(state)
-                        st.session_state["current_notice_id"] = selected_notice["id"]
-                        st.session_state["validation_feedback"] = (
-                            "Notice approved and moved to Executed."
-                        )
-                        st.rerun()
+                if st.button(
+                    "Approve and Execute",
+                    use_container_width=True,
+                    disabled=not approval_allowed,
+                ):
+                    selected_notice["investor"] = commitment_check.get("investor", "")
+                    selected_notice = set_notice_validation(selected_notice, validation_result)
+                    selected_notice = approve_notice(selected_notice)
+                    upsert_notice(state, selected_notice)
+                    persist_workflow_state(state)
+                    st.session_state["current_notice_id"] = selected_notice["id"]
+                    st.session_state["validation_feedback"] = (
+                        "Notice approved and moved to Executed."
+                    )
+                    st.rerun()
             with action_col2:
                 if st.button("Reject and Delete", use_container_width=True):
                     updated_state = delete_notice_by_id(state, selected_notice["id"])
@@ -1588,6 +1858,10 @@ elif page == "Executed Calls":
     commitment_workbook = ensure_commitment_dashboard_workbook(
         BASE_DIR / "data" / "reference" / "IO_Case_study_Capital_Calls.xlsx",
         BASE_DIR / "data" / "processed" / "capital_calls_master.xlsx",
+    )
+    approved_wires_df = load_approved_wires(
+        BASE_DIR / "data" / "reference" / "IO_Case_study_Capital_Calls.xlsx",
+        BASE_DIR / "data" / "processed" / "approved_wires_master.xlsx",
     )
     dashboard_data = load_commitment_dashboard(commitment_workbook)
 
@@ -1633,12 +1907,29 @@ elif page == "Executed Calls":
             executed_df["id"].astype(str).eq(st.session_state["executed_email_notice_id"])
         ]
         if not selected_email_row.empty:
-            executed_email_dialog(build_executed_email_context(selected_email_row.iloc[0].to_dict()))
+            email_context = enrich_record_with_approved_wire(
+                selected_email_row.iloc[0].to_dict(),
+                approved_wires_df,
+            )
+            executed_email_dialog(build_executed_email_context(email_context))
 
     if executed_df.empty:
         st.info("No capital calls have been executed yet.")
     else:
         executed_display_df = executed_df.copy()
+        executed_display_df["Open"] = False
+        sent_notice_ids = set(st.session_state.get("executed_email_sent_ids", []))
+        sent_timestamps = dict(st.session_state.get("executed_email_sent_at", {}))
+        executed_display_df["status_sent"] = executed_df["id"].astype(str).apply(
+            lambda notice_id: notice_id in sent_notice_ids
+        )
+        executed_display_df["sent_at"] = executed_df["id"].astype(str).apply(
+            lambda notice_id: sent_timestamps.get(notice_id, "")
+        )
+        if "sent_at" in executed_display_df.columns:
+            executed_display_df["sent_at"] = pd.to_datetime(
+                executed_display_df["sent_at"], errors="coerce"
+            )
         if "amount" in executed_display_df.columns:
             executed_display_df["amount"] = executed_display_df.apply(
                 lambda row: format_currency_display(
@@ -1651,68 +1942,84 @@ elif page == "Executed Calls":
             if column in executed_display_df.columns:
                 executed_display_df[column] = pd.to_datetime(
                     executed_display_df[column], errors="coerce"
-                ).dt.strftime("%d.%m.%Y %H:%M")
+                )
+        executed_table_df = executed_display_df[
+            ["status_sent", "sent_at", "Open", "investor", "fund_name", "amount", "value_date", "executed_at"]
+        ].rename(
+            columns={
+                "status_sent": "Email Status",
+                "sent_at": "Email Sent On",
+                "Open": "Select",
+                "investor": "Investor",
+                "fund_name": "Fund Name",
+                "amount": "Amount",
+                "value_date": "Value Date",
+                "executed_at": "Executed At",
+            }
+        )
+        for date_column in ["Email Sent On", "Value Date", "Executed At"]:
+            if date_column in executed_table_df.columns:
+                executed_table_df[date_column] = pd.to_datetime(
+                    executed_table_df[date_column], errors="coerce"
+                )
+        executed_table_df["Email Status"] = (
+            executed_table_df["Email Status"].fillna(False).astype(bool)
+        )
+        executed_table_df["Select"] = executed_table_df["Select"].fillna(False).astype(bool)
 
-        st.markdown('<div class="executed-table-wrap">', unsafe_allow_html=True)
-        header_cols = st.columns([1.05, 1.7, 2.4, 1.5, 1.0, 1.35, 1.35, 1.0])
-        header_labels = [
-            "Action",
-            "Investor",
-            "Fund Name",
-            "Amount",
-            "Currency",
-            "Value Date",
-            "Executed At",
-            "Source",
-        ]
-        st.markdown('<div class="executed-table-header">', unsafe_allow_html=True)
-        for col, label in zip(header_cols, header_labels):
-            col.markdown(
-                f'<div class="executed-header-cell"><div class="executed-col-label">{label}</div></div>',
-                unsafe_allow_html=True,
-            )
-        st.markdown('</div>', unsafe_allow_html=True)
+        edited_executed_df = st.data_editor(
+            executed_table_df,
+            use_container_width=True,
+            hide_index=True,
+            disabled=[
+                "Email Status",
+                "Email Sent On",
+                "Investor",
+                "Fund Name",
+                "Amount",
+                "Value Date",
+                "Executed At",
+            ],
+            column_config={
+                "Email Status": st.column_config.CheckboxColumn("Email Status", width="small"),
+                "Email Sent On": st.column_config.DateColumn(
+                    "Email Sent On",
+                    width="small",
+                    format="DD.MM.YYYY",
+                ),
+                "Select": st.column_config.CheckboxColumn(
+                    "Select",
+                    help="Select one executed call to open the email template.",
+                    width="small",
+                ),
+                "Investor": st.column_config.TextColumn("Investor", width="small"),
+                "Fund Name": st.column_config.TextColumn("Fund Name", width="medium"),
+                "Amount": st.column_config.TextColumn("Amount", width="small"),
+                "Value Date": st.column_config.DateColumn(
+                    "Value Date",
+                    width="small",
+                    format="DD.MM.YYYY",
+                ),
+                "Executed At": st.column_config.DateColumn(
+                    "Executed At",
+                    width="small",
+                    format="DD.MM.YYYY",
+                ),
+            },
+            key=f"executed_calls_table_{st.session_state.get('executed_calls_table_nonce', 0)}",
+        )
 
-        for _, row in executed_display_df.iterrows():
-            st.markdown('<div class="executed-table-row">', unsafe_allow_html=True)
-            row_cols = st.columns([1.05, 1.7, 2.4, 1.5, 1.0, 1.35, 1.35, 1.0])
-            notice_id = executed_df.loc[executed_df.index == row.name, "id"].iloc[0]
-            with row_cols[0]:
-                st.markdown('<div class="executed-button-cell">', unsafe_allow_html=True)
-                if st.button("Email", key=f"executed_email_btn_{notice_id}", use_container_width=True):
-                    st.session_state["executed_email_notice_id"] = notice_id
+        checked_rows = edited_executed_df.index[edited_executed_df["Select"]].tolist()
+        action_col1, action_col2 = st.columns([1.2, 4])
+        with action_col1:
+            if st.button("Open Email Template", use_container_width=True):
+                if len(checked_rows) != 1:
+                    st.warning("Please select exactly one executed call.")
+                elif open_executed_email_for_checked_rows(checked_rows, executed_df):
                     st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
-            row_cols[1].markdown(
-                f'<div class="executed-data-cell"><div class="executed-col-value">{row.get("investor", "")}</div></div>',
-                unsafe_allow_html=True,
-            )
-            row_cols[2].markdown(
-                f'<div class="executed-data-cell"><div class="executed-col-value">{row.get("fund_name", "")}</div></div>',
-                unsafe_allow_html=True,
-            )
-            row_cols[3].markdown(
-                f'<div class="executed-data-cell"><div class="executed-col-value">{row.get("amount", "")}</div></div>',
-                unsafe_allow_html=True,
-            )
-            row_cols[4].markdown(
-                f'<div class="executed-data-cell"><div class="executed-col-value">{row.get("currency", "")}</div></div>',
-                unsafe_allow_html=True,
-            )
-            row_cols[5].markdown(
-                f'<div class="executed-data-cell"><div class="executed-col-value">{row.get("value_date", "")}</div></div>',
-                unsafe_allow_html=True,
-            )
-            row_cols[6].markdown(
-                f'<div class="executed-data-cell"><div class="executed-col-value">{row.get("executed_at", "")}</div></div>',
-                unsafe_allow_html=True,
-            )
-            row_cols[7].markdown(
-                f'<div class="executed-data-cell"><div class="executed-col-value">{row.get("source", "")}</div></div>',
-                unsafe_allow_html=True,
-            )
-            st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        with action_col2:
+            if sent_notice_ids:
+                st.success("Sent emails are marked in the Status column.")
 
         st.caption(
             f"Executed calls: {len(executed_df)} | Total executed amount: "
