@@ -1,4 +1,4 @@
 from __future__ import annotations
 
-### Root package marker for the Project Sentinel application modules.
+### UI package bundling shared layout, dialogs, and rendering helpers.
 ###############################################################################

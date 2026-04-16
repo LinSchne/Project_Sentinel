@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import re
 from io import BytesIO
-from pathlib import Path
 
 
+### Recover rough text directly from raw PDF bytes when standard extraction fails.
+###############################################################################
 def _fallback_text_from_bytes(pdf_bytes: bytes) -> str:
     decoded = pdf_bytes.decode("latin-1", errors="ignore")
     chunks = re.findall(r"\(([^()]*)\)", decoded)
@@ -14,6 +15,8 @@ def _fallback_text_from_bytes(pdf_bytes: bytes) -> str:
     return decoded
 
 
+### Extract readable text from uploaded PDF bytes using pypdf with a byte-level fallback.
+###############################################################################
 def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
     try:
         from pypdf import PdfReader  # type: ignore
@@ -27,7 +30,3 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
         pass
 
     return _fallback_text_from_bytes(pdf_bytes)
-
-
-def extract_text_from_pdf_file(pdf_path: Path) -> str:
-    return extract_text_from_pdf_bytes(pdf_path.read_bytes())

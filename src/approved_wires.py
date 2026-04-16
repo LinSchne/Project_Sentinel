@@ -28,22 +28,30 @@ STATUS_LABELS = {
 }
 
 
+### Generate a consistent timestamp string for workbook updates.
+###############################################################################
 def now_ts() -> str:
     return pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+### Normalize free-text values so matching ignores casing and excess whitespace.
+###############################################################################
 def normalize_text(value: Any) -> str:
     if pd.isna(value):
         return ""
     return " ".join(str(value).strip().upper().split())
 
 
+### Normalize IBAN/account values so matching ignores spaces and casing.
+###############################################################################
 def normalize_iban(value: Any) -> str:
     if pd.isna(value):
         return ""
     return "".join(str(value).strip().upper().split())
 
 
+### Normalize UI and workbook status values into the allowed internal status labels.
+###############################################################################
 def normalize_status(value: Any) -> str:
     normalized = str(value).strip() if not pd.isna(value) else ""
     if normalized in STATUS_LABELS:
@@ -51,12 +59,16 @@ def normalize_status(value: Any) -> str:
     return normalized if normalized in VALID_STATUSES else "Active"
 
 
+### Compare values using either generic text normalization or IBAN-specific normalization.
+###############################################################################
 def normalized_match(value_a: Any, value_b: Any, column_name: str) -> bool:
     if column_name == "IBAN / Account Number":
         return normalize_iban(value_a) == normalize_iban(value_b)
     return normalize_text(value_a) == normalize_text(value_b)
 
 
+### Check whether a normalized IBAN already exists in the current dataset.
+###############################################################################
 def iban_exists(df: pd.DataFrame, iban: Any) -> bool:
     normalized_iban = normalize_iban(iban)
     if not normalized_iban or "IBAN / Account Number" not in df.columns:
@@ -66,6 +78,8 @@ def iban_exists(df: pd.DataFrame, iban: Any) -> bool:
     return existing_ibans.eq(normalized_iban).any()
 
 
+### Detect a duplicate approved-wire record and return the matching row details.
+###############################################################################
 def find_duplicate_record(
     df: pd.DataFrame,
     record: dict[str, Any],
@@ -97,6 +111,8 @@ def find_duplicate_record(
     }
 
 
+### Build a normalized duplicate key used for de-duplicating workbook rows.
+###############################################################################
 def make_duplicate_key(fund_name: Any, iban: Any, currency: Any) -> str:
     return "|".join(
         [
@@ -107,6 +123,8 @@ def make_duplicate_key(fund_name: Any, iban: Any, currency: Any) -> str:
     )
 
 
+### Ensure the approved-wires DataFrame always contains the required columns and defaults.
+###############################################################################
 def ensure_schema(
     df: pd.DataFrame,
     extra_columns: dict[str, Any] | None = None,
@@ -139,6 +157,8 @@ def ensure_schema(
     return df
 
 
+### Find the header row in the raw Excel source sheet before parsing the data region.
+###############################################################################
 def find_header_row(raw_df: pd.DataFrame) -> int:
     required_headers = set(BASE_COLUMNS)
 
@@ -158,6 +178,8 @@ def find_header_row(raw_df: pd.DataFrame) -> int:
     )
 
 
+### Read the original approved-wires sheet from the reference workbook.
+###############################################################################
 def read_source_approved_wires(source_workbook: Path) -> pd.DataFrame:
     raw_df = pd.read_excel(
         source_workbook,
@@ -192,6 +214,8 @@ def read_source_approved_wires(source_workbook: Path) -> pd.DataFrame:
     return data_df.reset_index(drop=True)
 
 
+### Remove duplicate approved-wire rows based on normalized fund/IBAN/currency keys.
+###############################################################################
 def remove_duplicates(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["_duplicate_key"] = df.apply(
@@ -207,6 +231,8 @@ def remove_duplicates(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+### Load the managed approved-wires workbook or initialize it from the source workbook.
+###############################################################################
 def load_approved_wires(
     source_workbook: Path,
     managed_workbook: Path,
@@ -237,6 +263,8 @@ def load_approved_wires(
     return df
 
 
+### Save the current approved-wires DataFrame back into the managed workbook.
+###############################################################################
 def save_approved_wires(
     df: pd.DataFrame,
     managed_workbook: Path,
@@ -250,6 +278,8 @@ def save_approved_wires(
         df_to_save.to_excel(writer, sheet_name=MANAGED_SHEET_NAME, index=False)
 
 
+### Reset the managed approved-wires workbook to the original reference source.
+###############################################################################
 def reset_approved_wires_to_source(
     source_workbook: Path,
     managed_workbook: Path,
@@ -270,6 +300,8 @@ def reset_approved_wires_to_source(
     return df
 
 
+### Apply UI filters such as search, fund, bank, currency, and status to the wire list.
+###############################################################################
 def apply_approved_wires_filters(
     df: pd.DataFrame,
     search_text: str = "",
@@ -312,6 +344,8 @@ def apply_approved_wires_filters(
     return filtered
 
 
+### Append a new approved-wire record after schema normalization and duplicate protection.
+###############################################################################
 def add_approved_wire_record(
     df: pd.DataFrame,
     record: dict[str, Any],
@@ -344,6 +378,8 @@ def add_approved_wire_record(
     return result
 
 
+### Merge editable UI changes back into the master approved-wires DataFrame.
+###############################################################################
 def update_editable_fields(
     master_df: pd.DataFrame,
     edited_df: pd.DataFrame,
@@ -368,6 +404,8 @@ def update_editable_fields(
     return updated
 
 
+### Return the subset of approved-wire columns that may be edited in the UI.
+###############################################################################
 def editable_columns_for_ui(df: pd.DataFrame) -> list[str]:
     return [
         col

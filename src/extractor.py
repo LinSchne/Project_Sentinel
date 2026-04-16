@@ -16,6 +16,11 @@ FIELD_PATTERNS = {
         r"Fund\s*Name[:\-]\s*(.+)",
         r"Fund[:\-]\s*(.+)",
     ],
+    "investor": [
+        r"Investor[:\-]\s*(.+)",
+        r"Limited\s*Partner[:\-]\s*(.+)",
+        r"LP[:\-]\s*(.+)",
+    ],
     "currency": [
         r"Currency[:\-]\s*([A-Z]{3})",
         r"\b(EUR|USD|GBP|CHF|JPY|CAD|AUD|SGD|HKD|CNY)\b",
@@ -35,10 +40,14 @@ FIELD_PATTERNS = {
 }
 
 
+### Normalize extracted text fragments by collapsing whitespace.
+###############################################################################
 def _clean_text(value: str) -> str:
     return " ".join(value.strip().split())
 
 
+### Search the notice text with a sequence of regex patterns and return the first hit.
+###############################################################################
 def _search_patterns(text: str, patterns: list[str]) -> str:
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE)
@@ -47,6 +56,8 @@ def _search_patterns(text: str, patterns: list[str]) -> str:
     return ""
 
 
+### Extract amount and currency values from free-form notice text.
+###############################################################################
 def _extract_amount_and_currency(text: str) -> tuple[float | None, str]:
     currency = _search_patterns(text, FIELD_PATTERNS["currency"])
     patterns = [
@@ -72,6 +83,8 @@ def _extract_amount_and_currency(text: str) -> tuple[float | None, str]:
         return None, currency
 
 
+### Extract the due date using a small set of expected date labels.
+###############################################################################
 def _extract_due_date(text: str) -> pd.Timestamp | pd.NaT:
     patterns = [
         r"Due\s*Date[:\-]\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4})",
@@ -87,11 +100,15 @@ def _extract_due_date(text: str) -> pd.Timestamp | pd.NaT:
     return pd.NaT
 
 
+### Extract the first email address found in the notice text.
+###############################################################################
 def _find_counterparty_email(text: str) -> str:
     match = re.search(r"([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})", text, flags=re.IGNORECASE)
     return match.group(1) if match else ""
 
 
+### Determine the fund name either from explicit labels or from the first plausible line.
+###############################################################################
 def _extract_fund_name(text: str) -> str:
     explicit = _search_patterns(text, FIELD_PATTERNS["fund_name"])
     if explicit:
@@ -106,6 +123,8 @@ def _extract_fund_name(text: str) -> str:
     return ""
 
 
+### Heuristic extraction fallback used when no LLM extraction is available.
+###############################################################################
 def heuristic_extract_notice_fields(text: str, filename: str = "") -> dict[str, Any]:
     amount, currency = _extract_amount_and_currency(text)
     due_date = _extract_due_date(text)
@@ -113,6 +132,7 @@ def heuristic_extract_notice_fields(text: str, filename: str = "") -> dict[str, 
     return {
         "source_filename": filename,
         "fund_name": _extract_fund_name(text),
+        "investor": _search_patterns(text, FIELD_PATTERNS["investor"]),
         "amount": amount,
         "currency": currency or "EUR",
         "due_date": due_date,
@@ -126,6 +146,8 @@ def heuristic_extract_notice_fields(text: str, filename: str = "") -> dict[str, 
     }
 
 
+### Parse the JSON object from an LLM response, including wrapped or noisy outputs.
+###############################################################################
 def _extract_json_object(response_text: str) -> dict[str, Any]:
     response_text = response_text.strip()
     if not response_text:
@@ -140,11 +162,13 @@ def _extract_json_object(response_text: str) -> dict[str, Any]:
         return json.loads(match.group(0))
 
 
+### Build the extraction prompt sent to the local LLM.
+###############################################################################
 def _ollama_prompt(text: str, filename: str) -> str:
     return f"""
 Extract the capital call notice fields from the text below.
 Return JSON only with exactly these keys:
-fund_name, amount, currency, due_date, beneficiary_bank, iban, swift, counterparty_email
+fund_name, investor, amount, currency, due_date, beneficiary_bank, iban, swift, counterparty_email
 
 Rules:
 - amount must be a number only
@@ -160,6 +184,8 @@ Notice text:
 """.strip()
 
 
+### Call Ollama, parse the structured response, and normalize the extracted fields.
+###############################################################################
 def ollama_extract_notice_fields(text: str, filename: str = "") -> dict[str, Any]:
     payload = {
         "model": ollama_model(),
@@ -193,6 +219,7 @@ def ollama_extract_notice_fields(text: str, filename: str = "") -> dict[str, Any
     return {
         "source_filename": filename,
         "fund_name": str(parsed.get("fund_name", "")).strip(),
+        "investor": str(parsed.get("investor", "")).strip(),
         "amount": amount,
         "currency": str(parsed.get("currency", "")).strip() or "EUR",
         "due_date": due_date,
@@ -206,6 +233,8 @@ def ollama_extract_notice_fields(text: str, filename: str = "") -> dict[str, Any
     }
 
 
+### Main extraction entrypoint selecting either Ollama or heuristic fallback logic.
+###############################################################################
 def extract_notice_fields(text: str, filename: str = "") -> dict[str, Any]:
     provider = llm_provider()
     if provider == "ollama":

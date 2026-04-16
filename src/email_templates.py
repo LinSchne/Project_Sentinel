@@ -5,6 +5,8 @@ from typing import Any
 import pandas as pd
 
 
+### Format the payment amount for the confirmation email body.
+###############################################################################
 def _fmt_amount(amount: Any, currency: str) -> str:
     if amount in (None, ""):
         return f"{currency} -"
@@ -12,6 +14,8 @@ def _fmt_amount(amount: Any, currency: str) -> str:
     return f"{currency} {formatted_amount}"
 
 
+### Format a date-like value into the email-friendly DD.MM.YYYY style.
+###############################################################################
 def _fmt_date(value: Any) -> str:
     if not value:
         return "-"
@@ -19,6 +23,8 @@ def _fmt_date(value: Any) -> str:
     return parsed.strftime("%d.%m.%Y") if pd.notna(parsed) else str(value)
 
 
+### Generate the payment confirmation email text for an executed capital call.
+###############################################################################
 def generate_payment_confirmation_email(notice: dict[str, Any]) -> str:
     fund_name = notice.get("fund_name", "your fund")
     amount = _fmt_amount(notice.get("amount"), notice.get("currency", "EUR"))

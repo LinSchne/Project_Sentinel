@@ -7,6 +7,8 @@ import pandas as pd
 from src.approved_wires import normalize_iban, normalize_text
 
 
+### Match an extracted fund name against the commitment tracker using exact and partial logic.
+###############################################################################
 def _match_fund_row(commitment_df: pd.DataFrame, fund_name: str) -> dict[str, Any] | None:
     if commitment_df.empty or not fund_name:
         return None
@@ -30,6 +32,8 @@ def _match_fund_row(commitment_df: pd.DataFrame, fund_name: str) -> dict[str, An
     return None
 
 
+### Validate whether the requested notice amount fits within the remaining open commitment.
+###############################################################################
 def validate_commitment(
     extracted_notice: dict[str, Any],
     commitment_df: pd.DataFrame,
@@ -73,6 +77,43 @@ def validate_commitment(
     }
 
 
+### Validate the extracted investor/limited partner against the matched commitment record.
+###############################################################################
+def validate_investor(
+    extracted_notice: dict[str, Any],
+    commitment_result: dict[str, Any],
+) -> dict[str, Any]:
+    extracted_investor = normalize_text(extracted_notice.get("investor", ""))
+    matched_investor = normalize_text(commitment_result.get("investor", ""))
+
+    if commitment_result.get("status") == "fail" and not matched_investor:
+        return {
+            "status": "fail",
+            "message": "Investor / Limited Partner could not be validated because the commitment match failed.",
+            "matched_investor": commitment_result.get("investor", ""),
+        }
+
+    if not extracted_investor:
+        return {
+            "status": "fail",
+            "message": "Investor / Limited Partner could not be extracted from the notice.",
+            "matched_investor": commitment_result.get("investor", ""),
+        }
+
+    is_match = extracted_investor == matched_investor
+    return {
+        "status": "pass" if is_match else "fail",
+        "message": (
+            "Investor / Limited Partner matches the Commitment Tracker record."
+            if is_match
+            else "Investor / Limited Partner does not match the Commitment Tracker record."
+        ),
+        "matched_investor": commitment_result.get("investor", ""),
+    }
+
+
+### Validate the notice IBAN against active approved wire records only.
+###############################################################################
 def validate_wire(
     extracted_notice: dict[str, Any],
     approved_wires_df: pd.DataFrame,
@@ -94,8 +135,21 @@ def validate_wire(
             "matched_record": None,
         }
 
-    matches = approved_wires_df[
-        approved_wires_df["IBAN / Account Number"]
+    active_wires_df = approved_wires_df
+    if "Status" in approved_wires_df.columns:
+        active_wires_df = approved_wires_df[
+            approved_wires_df["Status"].astype(str).str.strip().eq("Active")
+        ]
+
+    if active_wires_df.empty:
+        return {
+            "status": "fail",
+            "message": "No active approved wire records are available.",
+            "matched_record": None,
+        }
+
+    matches = active_wires_df[
+        active_wires_df["IBAN / Account Number"]
         .astype(str)
         .apply(normalize_iban)
         .eq(normalized_notice_iban)
@@ -116,21 +170,27 @@ def validate_wire(
     }
 
 
+### Run the full notice validation and combine commitment and wire checks into one result.
+###############################################################################
 def validate_notice(
     extracted_notice: dict[str, Any],
     commitment_df: pd.DataFrame,
     approved_wires_df: pd.DataFrame,
 ) -> dict[str, Any]:
     commitment_result = validate_commitment(extracted_notice, commitment_df)
+    investor_result = validate_investor(extracted_notice, commitment_result)
     wire_result = validate_wire(extracted_notice, approved_wires_df)
     overall_status = (
         "pass"
-        if commitment_result["status"] == "pass" and wire_result["status"] == "pass"
+        if commitment_result["status"] == "pass"
+        and investor_result["status"] == "pass"
+        and wire_result["status"] == "pass"
         else "fail"
     )
 
     return {
         "overall_status": overall_status,
         "commitment_check": commitment_result,
+        "investor_check": investor_result,
         "wire_check": wire_result,
     }

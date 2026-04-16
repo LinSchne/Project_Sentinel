@@ -16,6 +16,9 @@ UPCOMING_CAPITAL_CALLS_SHEET = "Upcoming Capital Calls"
 EXECUTED_CAPITAL_CALLS_SHEET = "Executed Capital Calls"
 
 
+#
+### Container object bundling the three dashboard datasets plus title metadata.
+###############################################################################
 @dataclass
 class CommitmentDashboardData:
     title: str
@@ -25,18 +28,24 @@ class CommitmentDashboardData:
     executed_df: pd.DataFrame
 
 
+### Normalize generic workbook text cells for stable comparisons and display logic.
+###############################################################################
 def normalize_text(value: object) -> str:
     if value is None:
         return ""
     return " ".join(str(value).strip().split())
 
 
+### Parse numeric workbook values into floats used for reporting calculations.
+###############################################################################
 def parse_number(value: object) -> float:
     if value in ("", None):
         return 0.0
     return float(value)
 
 
+### Parse workbook date strings in the expected DD.MM.YYYY format.
+###############################################################################
 def parse_date(value: object) -> pd.Timestamp | pd.NaT:
     cleaned = normalize_text(value)
     if not cleaned:
@@ -44,12 +53,36 @@ def parse_date(value: object) -> pd.Timestamp | pd.NaT:
     return pd.to_datetime(cleaned, format="%d.%m.%Y", errors="coerce")
 
 
+### Build a stable comparison key for capital calls across workbook and workflow data.
+###############################################################################
+def capital_call_match_key(
+    investor: object,
+    fund_name: object,
+    amount: object,
+    due_date: object,
+) -> str:
+    parsed_due_date = pd.to_datetime(due_date, errors="coerce")
+    due_date_key = parsed_due_date.strftime("%Y-%m-%d") if pd.notna(parsed_due_date) else ""
+    return "|".join(
+        [
+            normalize_text(investor),
+            normalize_text(fund_name),
+            f"{parse_number(amount):.2f}",
+            due_date_key,
+        ]
+    )
+
+
+### Format a numeric amount into the UI currency style used across the app.
+###############################################################################
 def format_currency(value: object, currency: str = "EUR") -> str:
     amount = parse_number(value)
     formatted_amount = f"{amount:,.2f}".replace(",", "'")
     return f"{currency} {formatted_amount}"
 
 
+### Read shared Excel string values needed when parsing workbook XML directly.
+###############################################################################
 def _load_shared_strings(workbook_zip: ZipFile) -> list[str]:
     if "xl/sharedStrings.xml" not in workbook_zip.namelist():
         return []
@@ -64,6 +97,8 @@ def _load_shared_strings(workbook_zip: ZipFile) -> list[str]:
     return shared_strings
 
 
+### Resolve workbook sheet names to their internal XML file targets.
+###############################################################################
 def _sheet_targets(workbook_zip: ZipFile) -> dict[str, str]:
     workbook_root = ET.fromstring(workbook_zip.read("xl/workbook.xml"))
     rels_root = ET.fromstring(workbook_zip.read("xl/_rels/workbook.xml.rels"))
@@ -79,6 +114,8 @@ def _sheet_targets(workbook_zip: ZipFile) -> dict[str, str]:
     return targets
 
 
+### Read raw cell values from a workbook sheet by parsing the underlying XLSX XML.
+###############################################################################
 def read_sheet_rows(source_workbook: Path, sheet_name: str) -> list[dict[str, str]]:
     with ZipFile(source_workbook) as workbook_zip:
         shared_strings = _load_shared_strings(workbook_zip)
@@ -110,6 +147,8 @@ def read_sheet_rows(source_workbook: Path, sheet_name: str) -> list[dict[str, st
     return rows
 
 
+### Detect the header row for a workbook-like row structure based on expected labels.
+###############################################################################
 def _header_index(rows: list[dict[str, str]], expected_headers: list[str]) -> int:
     expected = {normalize_text(header) for header in expected_headers}
     for index, row in enumerate(rows):
@@ -119,6 +158,8 @@ def _header_index(rows: list[dict[str, str]], expected_headers: list[str]) -> in
     raise ValueError(f"Could not find header row for sheet with headers: {expected_headers}")
 
 
+### Load the main Commitment Tracker sheet into a structured DataFrame.
+###############################################################################
 def load_commitment_tracker_sheet(source_workbook: Path) -> tuple[str, str, pd.DataFrame]:
     rows = read_sheet_rows(source_workbook, COMMITMENT_TRACKER_SHEET)
     header_idx = _header_index(
@@ -155,6 +196,8 @@ def load_commitment_tracker_sheet(source_workbook: Path) -> tuple[str, str, pd.D
     return title, as_of, pd.DataFrame(parsed_rows)
 
 
+### Load the historical Upcoming Capital Calls sheet into a structured DataFrame.
+###############################################################################
 def load_upcoming_capital_calls_sheet(source_workbook: Path) -> pd.DataFrame:
     rows = read_sheet_rows(source_workbook, UPCOMING_CAPITAL_CALLS_SHEET)
     header_idx = _header_index(rows, ["Investor", "Fund Name", "Amount", "Due date"])
@@ -177,6 +220,8 @@ def load_upcoming_capital_calls_sheet(source_workbook: Path) -> pd.DataFrame:
     return pd.DataFrame(parsed_rows)
 
 
+### Load the historical Executed Capital Calls sheet into a structured DataFrame.
+###############################################################################
 def load_executed_capital_calls_sheet(source_workbook: Path) -> pd.DataFrame:
     rows = read_sheet_rows(source_workbook, EXECUTED_CAPITAL_CALLS_SHEET)
     header_idx = _header_index(
@@ -202,6 +247,8 @@ def load_executed_capital_calls_sheet(source_workbook: Path) -> pd.DataFrame:
     return pd.DataFrame(parsed_rows)
 
 
+### Load all dashboard datasets from the reference or managed workbook.
+###############################################################################
 def load_commitment_dashboard(source_workbook: Path) -> CommitmentDashboardData:
     title, as_of, tracker_df = load_commitment_tracker_sheet(source_workbook)
     upcoming_df = load_upcoming_capital_calls_sheet(source_workbook)
@@ -216,6 +263,8 @@ def load_commitment_dashboard(source_workbook: Path) -> CommitmentDashboardData:
     )
 
 
+### Ensure the managed workbook copy exists before pages start reading from it.
+###############################################################################
 def ensure_commitment_dashboard_workbook(
     source_workbook: Path,
     managed_workbook: Path,
@@ -226,6 +275,8 @@ def ensure_commitment_dashboard_workbook(
     return managed_workbook
 
 
+### Replace the managed workbook copy with the original reference workbook.
+###############################################################################
 def reset_commitment_dashboard_to_source(
     source_workbook: Path,
     managed_workbook: Path,
@@ -235,42 +286,87 @@ def reset_commitment_dashboard_to_source(
     return managed_workbook
 
 
+### Prepare the main tracker table with formatted currency values for display.
+###############################################################################
 def prepare_commitment_tracker_display(df: pd.DataFrame) -> pd.DataFrame:
     display_df = df.copy()
-    for column in [
-        "Total Commitment",
-        "Total Funded YTD",
-        "Remaining Open Commitment",
-    ]:
-        if column in display_df.columns:
-            display_df[column] = display_df[column].apply(format_currency)
+    if "Investor" in display_df.columns:
+        display_df = display_df.rename(columns={"Investor": "Investor / Limited Partner"})
     return display_df
 
 
+### Aggregate tracker data by investor for the LP summary view.
+###############################################################################
+def prepare_investor_summary_display(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(
+            columns=[
+                "Investor / Limited Partner",
+                "Funds",
+                "Total Commitment",
+                "Total Funded YTD",
+                "Remaining Open Commitment",
+            ]
+        )
+
+    summary_df = (
+        df.groupby("Investor", dropna=False)
+        .agg(
+            {
+                "Fund Name": "count",
+                "Total Commitment": "sum",
+                "Total Funded YTD": "sum",
+                "Remaining Open Commitment": "sum",
+            }
+        )
+        .reset_index()
+        .rename(columns={"Fund Name": "Funds"})
+        .sort_values(by="Investor", na_position="last")
+        .reset_index(drop=True)
+    )
+
+    summary_df = summary_df.rename(columns={"Investor": "Investor / Limited Partner"})
+    return summary_df
+
+
+### Prepare the per-fund investor detail view with formatted amounts.
+###############################################################################
+def prepare_investor_fund_detail_display(df: pd.DataFrame) -> pd.DataFrame:
+    display_df = df.copy()
+    columns = [
+        col
+        for col in [
+            "Fund Name",
+            "Total Commitment",
+            "Total Funded YTD",
+            "Remaining Open Commitment",
+        ]
+        if col in display_df.columns
+    ]
+    display_df = display_df[columns]
+    return display_df
+
+
+### Prepare the upcoming-capital-calls table for UI display.
+###############################################################################
 def prepare_upcoming_capital_calls_display(df: pd.DataFrame) -> pd.DataFrame:
     display_df = df.copy()
-    if "Amount" in display_df.columns:
-        display_df["Amount"] = display_df["Amount"].apply(format_currency)
-    if "Due Date" in display_df.columns:
-        display_df["Due Date"] = display_df["Due Date"].apply(
-            lambda value: value.strftime("%d.%m.%Y") if pd.notna(value) else ""
-        )
+    if "Investor" in display_df.columns:
+        display_df = display_df.rename(columns={"Investor": "Investor / Limited Partner"})
     return display_df
 
 
+### Prepare the executed-capital-calls table for UI display.
+###############################################################################
 def prepare_executed_capital_calls_display(df: pd.DataFrame) -> pd.DataFrame:
     display_df = df.copy()
-    if "Capital Call Amount Paid" in display_df.columns:
-        display_df["Capital Call Amount Paid"] = display_df["Capital Call Amount Paid"].apply(
-            format_currency
-        )
-    if "Value Date" in display_df.columns:
-        display_df["Value Date"] = display_df["Value Date"].apply(
-            lambda value: value.strftime("%d.%m.%Y") if pd.notna(value) else ""
-        )
+    if "Investor" in display_df.columns:
+        display_df = display_df.rename(columns={"Investor": "Investor / Limited Partner"})
     return display_df
 
 
+### Compute top-level dashboard KPIs from the current dashboard datasets.
+###############################################################################
 def dashboard_metrics(data: CommitmentDashboardData) -> dict[str, str]:
     tracker_df = data.tracker_df
     upcoming_df = data.upcoming_df
@@ -296,6 +392,8 @@ def dashboard_metrics(data: CommitmentDashboardData) -> dict[str, str]:
     }
 
 
+### Overlay workflow notices onto the workbook-based dashboard datasets.
+###############################################################################
 def apply_workflow_updates(
     data: CommitmentDashboardData,
     notices: list[dict[str, object]],
@@ -303,6 +401,30 @@ def apply_workflow_updates(
     tracker_df = data.tracker_df.copy()
     upcoming_df = data.upcoming_df.copy()
     executed_df = data.executed_df.copy()
+    executed_notice_keys = {
+        capital_call_match_key(
+            notice.get("investor", ""),
+            notice.get("fund_name", ""),
+            notice.get("amount", 0),
+            notice.get("due_date", ""),
+        )
+        for notice in notices
+        if str(notice.get("status", "")).strip().lower() == "executed"
+    }
+
+    if not upcoming_df.empty:
+        upcoming_df = upcoming_df[
+            ~upcoming_df.apply(
+                lambda row: capital_call_match_key(
+                    row.get("Investor", ""),
+                    row.get("Fund Name", ""),
+                    row.get("Amount", 0),
+                    row.get("Due Date", ""),
+                )
+                in executed_notice_keys,
+                axis=1,
+            )
+        ].reset_index(drop=True)
 
     for notice in notices:
         fund_name = normalize_text(notice.get("fund_name", ""))
@@ -310,6 +432,12 @@ def apply_workflow_updates(
         due_date = pd.to_datetime(notice.get("due_date"), errors="coerce")
         status = str(notice.get("status", "")).strip().lower()
         investor = normalize_text(notice.get("investor", ""))
+        call_key = capital_call_match_key(
+            investor,
+            notice.get("fund_name", ""),
+            amount,
+            due_date,
+        )
 
         if not fund_name:
             continue
@@ -323,7 +451,7 @@ def apply_workflow_updates(
                 tracker_df.loc[tracker_matches, "Remaining Open Commitment"].astype(float) - amount
             )
 
-        if status in {"uploaded", "validated"}:
+        if status in {"uploaded", "validated", "scheduled"}:
             upcoming_row = {
                 "Investor": investor,
                 "Fund Name": notice.get("fund_name", ""),
@@ -331,9 +459,19 @@ def apply_workflow_updates(
                 "Due Date": due_date,
             }
             existing_mask = (
-                upcoming_df["Fund Name"].astype(str).apply(normalize_text).eq(fund_name)
-                & upcoming_df["Amount"].astype(float).eq(amount)
-            ) if not upcoming_df.empty else pd.Series(dtype=bool)
+                upcoming_df.apply(
+                    lambda row: capital_call_match_key(
+                        row.get("Investor", ""),
+                        row.get("Fund Name", ""),
+                        row.get("Amount", 0),
+                        row.get("Due Date", ""),
+                    )
+                    == call_key,
+                    axis=1,
+                )
+                if not upcoming_df.empty
+                else pd.Series(dtype=bool)
+            )
             if upcoming_df.empty or not existing_mask.any():
                 upcoming_df = pd.concat([upcoming_df, pd.DataFrame([upcoming_row])], ignore_index=True)
 
