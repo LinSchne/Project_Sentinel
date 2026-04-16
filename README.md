@@ -115,14 +115,63 @@ If Ollama is unavailable, the app falls back to rule-based extraction.
 
 ## Screenshots
 
-This README is prepared so you can add screenshots later. A practical pattern would be:
+<details>
+  <summary><strong>Overview</strong></summary>
+  <br>
+  <img width="1488" height="728" alt="Overview" src="https://github.com/user-attachments/assets/b69bced6-600b-4f56-a803-79187066c8d8" />
+</details>
 
-- one screenshot for the sidebar and overall layout
-- one screenshot per dashboard view
-- one screenshot for the upload/review flow
-- one screenshot for the validation screen
-- one screenshot for the upcoming-calls scheduling step
-- one screenshot for executed calls and email generation
+<details>
+  <summary><strong>Approved Wires</strong></summary>
+  <br>
+  <img width="1488" height="725" alt="Approved Wires 1" src="https://github.com/user-attachments/assets/cbf39808-de04-4da5-85e0-8893f53dd9c6" />
+  <br><br>
+  <img width="1488" height="558" alt="Approved Wires 2" src="https://github.com/user-attachments/assets/9eac7104-c2a5-4bd5-ac25-6a21626e45ba" />
+</details>
+
+<details>
+  <summary><strong>Commitment Tracker</strong></summary>
+  <br>
+  <img width="1488" height="713" alt="Commitment Tracker" src="https://github.com/user-attachments/assets/862d17c9-3391-437b-a4a1-9dea07236017" />
+</details>
+
+<details>
+  <summary><strong>Investments per Investor / Limited Partner</strong></summary>
+  <br>
+  <img width="1488" height="747" alt="Investments per Investor / Limited Partner" src="https://github.com/user-attachments/assets/e72019b8-a379-4f06-9359-17053b76e74e" />
+</details>
+
+<details>
+  <summary><strong>Upload Notice</strong></summary>
+  <br>
+  <img width="1488" height="719" alt="Upload Notice" src="https://github.com/user-attachments/assets/fbbbfc55-a71d-45f7-87ab-69ff583974e8" />
+</details>
+
+<details>
+  <summary><strong>Validation</strong></summary>
+  <br>
+  <img width="1488" height="745" alt="Validation 1" src="https://github.com/user-attachments/assets/4a0b8368-d75b-4246-945d-27526c1e9e1e" />
+  <br><br>
+  <img width="1488" height="736" alt="Validation 2" src="https://github.com/user-attachments/assets/97889138-0143-4d62-a438-20444e8a413e" />
+</details>
+
+<details>
+  <summary><strong>Upcoming Calls</strong></summary>
+  <br>
+  <img width="1488" height="736" alt="Upcoming Calls 1" src="https://github.com/user-attachments/assets/98b403d2-bd38-4f9b-8873-c2bdb0276f49" />
+  <br><br>
+  <img width="1007" height="592" alt="Upcoming Calls 2" src="https://github.com/user-attachments/assets/8f0f8624-8426-4bbc-b462-04e84d47904f" />
+</details>
+
+<details>
+  <summary><strong>Executed Capital Calls</strong></summary>
+  <br>
+  <img width="1470" height="712" alt="Executed Capital Calls 1" src="https://github.com/user-attachments/assets/b25d7cc1-eb6e-48d5-840c-f5c4b06ac881" />
+  <br><br>
+  <img width="1001" height="429" alt="Executed Capital Calls 2" src="https://github.com/user-attachments/assets/cc9e9ccf-6858-4380-b4ad-5651a99696a3" />
+  <br><br>
+  <img width="1473" height="711" alt="Executed Capital Calls 3" src="https://github.com/user-attachments/assets/287755c7-ef86-420b-b2ae-3f783d6ea50f" />
+</details>
 
 ## Contact
 
