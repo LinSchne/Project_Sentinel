@@ -20,6 +20,7 @@ FIELD_PATTERNS = {
         r"Investor[:\-]\s*(.+)",
         r"Limited\s*Partner[:\-]\s*(.+)",
         r"LP[:\-]\s*(.+)",
+        r"To[:\-]\s*(.+)",
     ],
     "currency": [
         r"Currency[:\-]\s*([A-Z]{3})",
@@ -54,6 +55,31 @@ def _search_patterns(text: str, patterns: list[str]) -> str:
         if match:
             return _clean_text(match.group(1))
     return ""
+
+
+### Detect obvious placeholder values that are not usable as an extracted investor name.
+###############################################################################
+def _is_placeholder_investor(value: Any) -> bool:
+    cleaned = _clean_text(str(value or "")).lower()
+    return cleaned in {"", "to", "investor", "limited partner", "lp"}
+
+
+### Filter out structural lines that should not be interpreted as investor names.
+###############################################################################
+def _is_non_investor_line(value: str) -> bool:
+    lowered = _clean_text(value).lower()
+    return (
+        not lowered
+        or lowered.startswith(("amount", "due date", "payment instructions", "bank", "iban", "swift", "bic"))
+        or bool(re.match(r"^(eur|usd|gbp|chf|jpy|cad|aud|sgd|hkd|cny)\b", lowered))
+        or bool(re.match(r"^[0-9]", lowered))
+    )
+
+
+### Return the meaningful text lines of a notice in reading order.
+###############################################################################
+def _content_lines(text: str) -> list[str]:
+    return [_clean_text(line) for line in text.splitlines() if _clean_text(line)]
 
 
 ### Extract amount and currency values from free-form notice text.
@@ -114,12 +140,52 @@ def _extract_fund_name(text: str) -> str:
     if explicit:
         return explicit
 
-    lines = [_clean_text(line) for line in text.splitlines() if _clean_text(line)]
+    lines = _content_lines(text)
     for line in lines:
         lowered = line.lower()
         if lowered.startswith(("to:", "amount:", "due date:", "payment instructions", "bank:", "iban:", "swift:", "bic:")):
             continue
         return line
+    return ""
+
+
+### Determine the investor / limited partner from labels, addressee lines, or known notice layout.
+###############################################################################
+def _extract_investor(text: str) -> str:
+    lines = _content_lines(text)
+
+    for line in lines:
+        line_match = re.match(r"^(?:Investor|Limited\s*Partner|LP|To)\s*:\s*(.+)$", line, flags=re.IGNORECASE)
+        if line_match:
+            candidate = _clean_text(line_match.group(1))
+            if not _is_placeholder_investor(candidate):
+                return candidate
+
+    explicit = _search_patterns(text, FIELD_PATTERNS["investor"])
+    if explicit and not _is_placeholder_investor(explicit):
+        return explicit
+
+    for line in lines:
+        lowered = line.lower()
+        if lowered.startswith("to:") or lowered.startswith("to :"):
+            candidate = _clean_text(line.split(":", 1)[1]) if ":" in line else ""
+            if not _is_placeholder_investor(candidate):
+                return candidate
+
+    fund_name = _extract_fund_name(text)
+    if fund_name:
+        try:
+            fund_index = lines.index(fund_name)
+        except ValueError:
+            fund_index = -1
+
+        if fund_index >= 0:
+            for candidate in lines[fund_index + 1 :]:
+                if _is_non_investor_line(candidate):
+                    break
+                if not _is_placeholder_investor(candidate):
+                    return candidate
+
     return ""
 
 
@@ -132,7 +198,7 @@ def heuristic_extract_notice_fields(text: str, filename: str = "") -> dict[str, 
     return {
         "source_filename": filename,
         "fund_name": _extract_fund_name(text),
-        "investor": _search_patterns(text, FIELD_PATTERNS["investor"]),
+        "investor": _extract_investor(text),
         "amount": amount,
         "currency": currency or "EUR",
         "due_date": due_date,
@@ -175,6 +241,7 @@ Rules:
 - currency must be a 3-letter code if available
 - due_date must be in ISO format YYYY-MM-DD if available
 - iban and swift should be plain strings
+- investor may appear as Investor, Limited Partner, LP, or To
 - if a field is missing, return an empty string
 
 Filename: {filename}
@@ -216,7 +283,7 @@ def ollama_extract_notice_fields(text: str, filename: str = "") -> dict[str, Any
         except ValueError:
             amount = None
 
-    return {
+    extracted = {
         "source_filename": filename,
         "fund_name": str(parsed.get("fund_name", "")).strip(),
         "investor": str(parsed.get("investor", "")).strip(),
@@ -231,6 +298,46 @@ def ollama_extract_notice_fields(text: str, filename: str = "") -> dict[str, Any
         "extraction_provider": "ollama",
         "extraction_model": ollama_model(),
     }
+
+    heuristic_fallback = heuristic_extract_notice_fields(text, filename=filename)
+    for field_name in [
+        "fund_name",
+        "investor",
+        "amount",
+        "currency",
+        "due_date",
+        "beneficiary_bank",
+        "iban",
+        "swift",
+        "counterparty_email",
+    ]:
+        current_value = extracted.get(field_name)
+        should_replace = current_value in ("", None) or (
+            field_name == "due_date" and pd.isna(current_value)
+        )
+        if field_name == "investor" and _is_placeholder_investor(current_value):
+            should_replace = True
+
+        if should_replace:
+            fallback_value = heuristic_fallback.get(field_name)
+            if fallback_value not in ("", None) and not (
+                field_name == "due_date" and pd.isna(fallback_value)
+            ):
+                extracted[field_name] = fallback_value
+
+    heuristic_investor = heuristic_fallback.get("investor", "")
+    heuristic_fund_name = heuristic_fallback.get("fund_name", "")
+    if heuristic_investor and heuristic_fund_name:
+        normalized_fund = _clean_text(str(extracted.get("fund_name", "")))
+        normalized_investor = _clean_text(str(extracted.get("investor", "")))
+        if heuristic_investor in normalized_fund and (
+            _is_placeholder_investor(normalized_investor)
+            or normalized_investor in {"", "To"}
+        ):
+            extracted["fund_name"] = heuristic_fund_name
+            extracted["investor"] = heuristic_investor
+
+    return extracted
 
 
 ### Main extraction entrypoint selecting either Ollama or heuristic fallback logic.

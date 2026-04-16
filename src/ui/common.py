@@ -9,6 +9,7 @@ import pandas as pd
 from pandas.io.formats.style import Styler
 import streamlit as st
 
+from src.fund_name_utils import normalize_fund_name_for_matching
 from src.app_context import APPROVED_WIRES_HIDDEN_COLUMNS
 
 
@@ -270,6 +271,7 @@ def find_matching_approved_wire_record(record, approved_wires_df):
         return None
 
     fund_name = normalize_lookup_text(record.get("fund_name", ""))
+    normalized_numeric_fund_name = normalize_fund_name_for_matching(record.get("fund_name", ""))
     currency = normalize_lookup_text(record.get("currency", ""))
     iban = normalize_lookup_iban(record.get("iban", ""))
     beneficiary_bank = normalize_lookup_text(record.get("beneficiary_bank", ""))
@@ -318,6 +320,23 @@ def find_matching_approved_wire_record(record, approved_wires_df):
     if not candidate_df.empty:
         return candidate_df.iloc[0].to_dict()
 
+    numeric_candidate_df = active_wires_df[
+        active_wires_df["Fund Name"]
+        .astype(str)
+        .apply(normalize_fund_name_for_matching)
+        .eq(normalized_numeric_fund_name)
+    ]
+
+    if currency and not numeric_candidate_df.empty and "Currency" in numeric_candidate_df.columns:
+        currency_matches = numeric_candidate_df[
+            numeric_candidate_df["Currency"].apply(normalize_lookup_text).eq(currency)
+        ]
+        if not currency_matches.empty:
+            return currency_matches.iloc[0].to_dict()
+
+    if not numeric_candidate_df.empty:
+        return numeric_candidate_df.iloc[0].to_dict()
+
     fallback_df = active_wires_df[
         active_wires_df["Fund Name"].apply(
             lambda value: fund_name in normalize_lookup_text(value)
@@ -342,13 +361,19 @@ def find_matching_approved_wire_record(record, approved_wires_df):
 ###############################################################################
 def enrich_record_with_approved_wire(record, approved_wires_df):
     enriched_record = dict(record)
-    if enriched_record.get("iban") and enriched_record.get("swift"):
+    if (
+        enriched_record.get("iban")
+        and enriched_record.get("swift")
+        and enriched_record.get("beneficiary_bank")
+    ):
         return enriched_record
 
     matched_wire = find_matching_approved_wire_record(enriched_record, approved_wires_df)
     if not matched_wire:
         return enriched_record
 
+    if not enriched_record.get("beneficiary_bank"):
+        enriched_record["beneficiary_bank"] = matched_wire.get("Beneficiary Bank", "")
     if not enriched_record.get("iban"):
         enriched_record["iban"] = matched_wire.get("IBAN / Account Number", "")
     if not enriched_record.get("swift"):

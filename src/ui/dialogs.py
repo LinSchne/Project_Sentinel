@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import pandas as pd
 import streamlit as st
 
@@ -37,6 +38,7 @@ from src.workflow import (
     create_notice_record,
     delete_notice_by_id,
     reset_workflow_state,
+    schedule_notice,
     upsert_notice,
 )
 
@@ -257,7 +259,7 @@ def executed_email_dialog(notice):
     )
     action_col1, action_col2 = st.columns(2)
     with action_col1:
-        if st.button("Copy and Mark as Sent", use_container_width=True, type="primary"):
+        if st.button("Mark as Sent", use_container_width=True, type="primary"):
             mark_executed_email_as_sent(notice.get("id", ""))
             st.rerun()
     with action_col2:
@@ -281,72 +283,141 @@ def execute_scheduled_call_dialog(notice, approved_wires_df):
         if suggestion_lines:
             st.info("Suggested from Approved Wires: " + " | ".join(suggestion_lines))
 
-    render_record_summary(
-        {
-            "Fund Name": enriched_notice.get("fund_name", ""),
-            "Investor / Limited Partner": enriched_notice.get("investor", ""),
-            "Amount": format_currency_display(
-                float(enriched_notice.get("amount", 0) or 0),
-                enriched_notice.get("currency", "EUR"),
-            ),
-            "Currency": enriched_notice.get("currency", ""),
-            "Due Date": pd.to_datetime(enriched_notice.get("due_date"), errors="coerce").strftime("%d.%m.%Y")
-            if pd.notna(pd.to_datetime(enriched_notice.get("due_date"), errors="coerce"))
-            else enriched_notice.get("due_date", ""),
-            "Beneficiary Bank": enriched_notice.get("beneficiary_bank", ""),
-            "IBAN": enriched_notice.get("iban", ""),
-            "SWIFT/BIC": enriched_notice.get("swift", ""),
-        },
-        "Scheduled Capital Call",
-    )
+    due_date_value = pd.to_datetime(enriched_notice.get("due_date"), errors="coerce")
+    due_date_default = due_date_value.strftime("%d.%m.%Y") if pd.notna(due_date_value) else ""
 
-    action_col1, action_col2 = st.columns(2)
-    with action_col1:
-        if st.button("Confirm and Move to Executed", use_container_width=True, type="primary"):
+    st.markdown("**Scheduled Capital Call**")
+    st.caption("All fields can be edited here. Suggested wire details are prefilled from Approved Wires when available.")
+
+    with st.form(f"execute_scheduled_call_form_{notice.get('id', 'notice')}", clear_on_submit=False):
+        review_col1, review_col2 = st.columns(2)
+
+        with review_col1:
+            fund_name_input = st.text_input("Fund Name", value=enriched_notice.get("fund_name", ""))
+            investor_input = st.text_input(
+                "Investor / Limited Partner",
+                value=enriched_notice.get("investor", ""),
+            )
+            amount_input = st.text_input(
+                "Amount",
+                value=format_currency_display(
+                    float(enriched_notice.get("amount", 0) or 0),
+                    enriched_notice.get("currency", "EUR"),
+                ),
+            )
+            currency_input = st.text_input("Currency", value=enriched_notice.get("currency", ""))
+            due_date_input = st.text_input("Due Date", value=due_date_default)
+
+        with review_col2:
+            beneficiary_bank_input = st.text_input(
+                "Beneficiary Bank",
+                value=enriched_notice.get("beneficiary_bank", ""),
+            )
+            iban_input = st.text_input("IBAN", value=enriched_notice.get("iban", ""))
+            swift_input = st.text_input("SWIFT/BIC", value=enriched_notice.get("swift", ""))
+
+        parsed_due_date = pd.to_datetime(due_date_input, dayfirst=True, errors="coerce")
+        parsed_amount = None
+        amount_text = str(amount_input).strip()
+        if amount_text:
+            amount_cleaned = amount_text
+            currency_prefix = str(currency_input or "").strip().upper()
+            if currency_prefix:
+                amount_cleaned = re.sub(
+                    rf"^\s*{re.escape(currency_prefix)}\s+",
+                    "",
+                    amount_cleaned,
+                    flags=re.IGNORECASE,
+                )
+            try:
+                parsed_amount = parse_amount_input(amount_cleaned)
+            except ValueError:
+                parsed_amount = None
+
+        required_fields_complete = all(
+            [
+                str(fund_name_input).strip(),
+                str(investor_input).strip(),
+                parsed_amount is not None,
+                str(currency_input).strip(),
+                pd.notna(parsed_due_date),
+                str(beneficiary_bank_input).strip(),
+                str(iban_input).strip(),
+                str(swift_input).strip(),
+            ]
+        )
+
+        if not required_fields_complete:
+            st.warning(
+                "Execution is only possible when all fields are filled correctly, including a valid amount and due date."
+            )
+
+        action_col1, action_col2, action_col3 = st.columns(3)
+        save_clicked = action_col1.form_submit_button("Save Settings", use_container_width=True)
+        confirm_clicked = action_col2.form_submit_button(
+            "Confirm and Move to Executed",
+            use_container_width=True,
+            type="primary",
+            disabled=not required_fields_complete,
+        )
+        cancel_clicked = action_col3.form_submit_button("Cancel", use_container_width=True)
+
+        if save_clicked or confirm_clicked:
             state = workflow_state()
             current_notice = next(
                 (entry for entry in state.get("notices", []) if entry.get("id") == notice.get("id")),
                 None,
             )
+
+            payload = {
+                "fund_name": fund_name_input.strip(),
+                "investor": investor_input.strip(),
+                "amount": parsed_amount,
+                "currency": currency_input.strip().upper(),
+                "due_date": parsed_due_date,
+                "beneficiary_bank": beneficiary_bank_input.strip(),
+                "iban": iban_input.strip(),
+                "swift": swift_input.strip(),
+            }
+
             if current_notice is not None:
                 updated_notice = dict(current_notice)
-                updated_notice.update(
-                    {
-                        "beneficiary_bank": enriched_notice.get("beneficiary_bank", ""),
-                        "iban": enriched_notice.get("iban", ""),
-                        "swift": enriched_notice.get("swift", ""),
-                    }
-                )
-                updated_notice = approve_notice(updated_notice)
-                upsert_notice(state, updated_notice)
-                st.session_state["upcoming_calls_feedback"] = (
-                    "Scheduled capital call moved to Executed Capital Calls successfully."
-                )
+                updated_notice.update(payload)
+                updated_notice["status"] = "scheduled"
             else:
-                historical_notice = create_notice_record(
+                updated_notice = create_notice_record(
                     {
                         "source_filename": "Historical Upcoming Capital Calls",
-                        "fund_name": enriched_notice.get("fund_name", ""),
-                        "investor": enriched_notice.get("investor", ""),
-                        "amount": enriched_notice.get("amount", 0),
-                        "currency": enriched_notice.get("currency", "EUR"),
-                        "due_date": enriched_notice.get("due_date", ""),
-                        "beneficiary_bank": enriched_notice.get("beneficiary_bank", ""),
-                        "iban": enriched_notice.get("iban", ""),
-                        "swift": enriched_notice.get("swift", ""),
+                        **payload,
                     }
                 )
-                historical_notice["source"] = "Historical Upcoming Capital Calls"
-                historical_notice = approve_notice(historical_notice)
-                upsert_notice(state, historical_notice)
+                updated_notice["source"] = "Historical Upcoming Capital Calls"
+                updated_notice["source_upcoming_id"] = notice.get("id", "")
+                updated_notice = schedule_notice(updated_notice)
+
+            if save_clicked:
+                if not pd.notna(parsed_due_date):
+                    st.warning("Please enter a valid Due Date before saving.")
+                    return
+                upsert_notice(state, updated_notice)
+                persist_workflow_state(state)
+                st.session_state["upcoming_calls_feedback"] = (
+                    "Scheduled capital call settings saved successfully."
+                )
+                st.session_state.pop("scheduled_call_execute_id", None)
+                st.rerun()
+
+            if confirm_clicked:
+                updated_notice = approve_notice(updated_notice)
+                upsert_notice(state, updated_notice)
+                persist_workflow_state(state)
                 st.session_state["upcoming_calls_feedback"] = (
                     "Scheduled capital call moved to Executed Capital Calls successfully."
                 )
-            persist_workflow_state(state)
-            st.session_state.pop("scheduled_call_execute_id", None)
-            st.rerun()
-    with action_col2:
-        if st.button("Cancel", use_container_width=True):
+                st.session_state.pop("scheduled_call_execute_id", None)
+                st.rerun()
+
+        if cancel_clicked:
             st.session_state.pop("scheduled_call_execute_id", None)
             st.rerun()
 
@@ -354,10 +425,17 @@ def execute_scheduled_call_dialog(notice, approved_wires_df):
 ### Review extracted notice data before moving a notice into the validation workflow.
 ###############################################################################
 @st.dialog("Review Extracted Data")
-def review_notice_dialog(review_notice):
+def review_notice_dialog(review_notice, fund_name_hint=None):
     st.info(
         "Please verify the extracted data. If everything is correct, accept it. If something is wrong, edit the fields below and then accept."
     )
+
+    if fund_name_hint:
+        st.warning(
+            "Fund-name number format check: the extracted fund name may use Arabic numbers "
+            "where the Commitment Tracker uses Roman numerals, or vice versa. "
+            f"Please verify the fund name against the tracker entry: {fund_name_hint.get('matched_fund', '-')}"
+        )
 
     editable = editable_notice_payload(review_notice)
 

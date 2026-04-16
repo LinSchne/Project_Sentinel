@@ -5,6 +5,7 @@ import streamlit as st
 
 from src.approved_wires import load_approved_wires
 from src.app_context import APPROVED_WIRES_WORKBOOK, CAPITAL_CALLS_WORKBOOK, REFERENCE_WORKBOOK
+from src.commitment_tracker import ensure_commitment_dashboard_workbook, load_commitment_dashboard
 from src.services.dashboard_service import load_dashboard_with_workflow
 from src.state import persist_workflow_state, workflow_state
 from src.ui.common import (
@@ -75,6 +76,11 @@ def render_validation_page() -> None:
                 CAPITAL_CALLS_WORKBOOK,
                 state.get("notices", []),
             )
+            commitment_workbook = ensure_commitment_dashboard_workbook(
+                REFERENCE_WORKBOOK,
+                CAPITAL_CALLS_WORKBOOK,
+            )
+            source_dashboard_data = load_commitment_dashboard(commitment_workbook)
             approved_wires_df = load_approved_wires(REFERENCE_WORKBOOK, APPROVED_WIRES_WORKBOOK)
             approved_wire_suggestions = build_approved_wire_suggestions(
                 selected_notice,
@@ -85,6 +91,8 @@ def render_validation_page() -> None:
                 selected_notice,
                 dashboard_data.tracker_df,
                 approved_wires_df,
+                notices=state.get("notices", []),
+                historical_upcoming_df=source_dashboard_data.upcoming_df,
             )
 
             if approved_wire_suggestions:
@@ -112,8 +120,43 @@ def render_validation_page() -> None:
                 st.write(f"Matched fund: {commitment_check.get('matched_fund') or '-'}")
                 if commitment_check.get("remaining_open_commitment") is not None:
                     st.write(
-                        "Remaining open commitment: "
+                        "Remaining open commitment before scheduled calls: "
                         f"{format_currency_display(float(commitment_check['remaining_open_commitment']))}"
+                    )
+                historical_upcoming_amount = float(
+                    commitment_check.get("historical_upcoming_amount", 0) or 0
+                )
+                if historical_upcoming_amount > 0:
+                    st.warning(
+                        "Already pending in historical Upcoming Capital Calls: "
+                        f"{format_currency_display(historical_upcoming_amount)}"
+                    )
+                    st.caption(
+                        "Historical upcoming capital calls already reserving commitment: "
+                        f"{len(commitment_check.get('historical_upcoming_entries', []))}"
+                    )
+                workflow_scheduled_amount = float(
+                    commitment_check.get("workflow_scheduled_amount", 0) or 0
+                )
+                if workflow_scheduled_amount > 0:
+                    st.info(
+                        "Already scheduled in workflow Upcoming Capital Calls: "
+                        f"{format_currency_display(workflow_scheduled_amount)}"
+                    )
+                    st.caption(
+                        "Workflow-scheduled capital calls already reserving commitment: "
+                        f"{len(commitment_check.get('workflow_scheduled_entries', []))}"
+                    )
+                scheduled_amount = float(commitment_check.get("scheduled_amount", 0) or 0)
+                if scheduled_amount > 0:
+                    st.write(
+                        "Total reserved by Upcoming Capital Calls: "
+                        f"{format_currency_display(scheduled_amount)}"
+                    )
+                if commitment_check.get("adjusted_remaining_open_commitment") is not None:
+                    st.write(
+                        "Remaining open commitment after scheduled calls: "
+                        f"{format_currency_display(float(commitment_check['adjusted_remaining_open_commitment']))}"
                     )
             with detail_col2:
                 st.markdown("**Investor Check Details**")

@@ -40,6 +40,11 @@ def _scheduled_workflow_calls_df(state: dict) -> pd.DataFrame:
 ### Convert the workbook's historical upcoming sheet into the same list schema.
 ###############################################################################
 def _historical_upcoming_calls_df(state: dict) -> pd.DataFrame:
+    overridden_source_ids = {
+        str(notice.get("source_upcoming_id", "")).strip()
+        for notice in state.get("notices", [])
+        if str(notice.get("source_upcoming_id", "")).strip()
+    }
     executed_keys = {
         capital_call_match_key(
             notice.get("investor", ""),
@@ -89,6 +94,10 @@ def _historical_upcoming_calls_df(state: dict) -> pd.DataFrame:
 
     if executed_keys:
         historical_df = historical_df[~historical_df["match_key"].isin(executed_keys)]
+    if overridden_source_ids:
+        historical_df = historical_df[
+            ~historical_df["id"].astype(str).isin(overridden_source_ids)
+        ]
 
     return historical_df.reset_index(drop=True)
 

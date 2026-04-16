@@ -3,8 +3,10 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from src.app_context import CAPITAL_CALLS_WORKBOOK, REFERENCE_WORKBOOK
 from src.extractor import extract_notice_fields
 from src.pdf_reader import extract_text_from_pdf_bytes
+from src.services.dashboard_service import load_dashboard_with_workflow
 from src.state import persist_workflow_state, save_uploaded_notice_file, workflow_state
 from src.ui.common import (
     build_table_styler,
@@ -13,6 +15,7 @@ from src.ui.common import (
     render_page_hero,
 )
 from src.ui.dialogs import edit_uploaded_notice_dialog, review_notice_dialog, uploaded_notices_reset_dialog
+from src.validator import suggest_fund_name_match
 from src.workflow import (
     create_notice_record,
     get_notice_by_id,
@@ -81,7 +84,16 @@ def render_upload_notice_page() -> None:
             review_notice = get_notice_by_id(state, review_notices_df.iloc[0]["id"])
 
         if review_notice:
-            review_notice_dialog(review_notice)
+            dashboard_data = load_dashboard_with_workflow(
+                REFERENCE_WORKBOOK,
+                CAPITAL_CALLS_WORKBOOK,
+                state.get("notices", []),
+            )
+            fund_name_hint = suggest_fund_name_match(
+                review_notice.get("fund_name", ""),
+                dashboard_data.tracker_df,
+            )
+            review_notice_dialog(review_notice, fund_name_hint=fund_name_hint)
 
     notices_df = notices_to_dataframe(state.get("notices", []), statuses=["uploaded", "validated", "executed"])
     if st.session_state.get("uploaded_notice_edit_id") and not notices_df.empty:

@@ -118,7 +118,7 @@ def render_executed_calls_page() -> None:
                 executed_display_df[column], errors="coerce"
             )
     executed_table_df = executed_display_df[
-        ["status_sent", "sent_at", "Open", "investor", "fund_name", "amount", "value_date", "executed_at"]
+        ["status_sent", "sent_at", "Open", "investor", "fund_name", "amount", "executed_at"]
     ].rename(
         columns={
             "status_sent": "Email Status",
@@ -127,11 +127,10 @@ def render_executed_calls_page() -> None:
             "investor": "Investor / Limited Partner",
             "fund_name": "Fund Name",
             "amount": "Amount",
-            "value_date": "Value Date",
             "executed_at": "Executed At",
         }
     )
-    for date_column in ["Email Sent On", "Value Date", "Executed At"]:
+    for date_column in ["Email Sent On", "Executed At"]:
         if date_column in executed_table_df.columns:
             executed_table_df[date_column] = pd.to_datetime(
                 executed_table_df[date_column], errors="coerce"
@@ -153,7 +152,6 @@ def render_executed_calls_page() -> None:
             "Investor / Limited Partner",
             "Fund Name",
             "Amount",
-            "Value Date",
             "Executed At",
         ],
         column_config={
@@ -170,11 +168,6 @@ def render_executed_calls_page() -> None:
             ),
             "Investor / Limited Partner": st.column_config.TextColumn("Investor / Limited Partner", width="small"),
             "Fund Name": st.column_config.TextColumn("Fund Name", width="medium"),
-            "Value Date": st.column_config.DateColumn(
-                "Value Date",
-                width="small",
-                format="DD.MM.YYYY",
-            ),
             "Executed At": st.column_config.DateColumn(
                 "Executed At",
                 width="small",

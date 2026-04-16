@@ -150,13 +150,13 @@ def render_approved_wires_page() -> None:
             st.rerun()
 
     with action_col2:
-        if st.button("Reset to Source", use_container_width=True):
-            st.session_state["approved_wire_show_reset_dialog"] = True
+        if st.button("Add New Record", use_container_width=True):
+            st.session_state["approved_wire_show_add_dialog"] = True
             st.rerun()
 
     with action_col3:
-        if st.button("Add New Record", use_container_width=True):
-            st.session_state["approved_wire_show_add_dialog"] = True
+        if st.button("Reset to Source", use_container_width=True):
+            st.session_state["approved_wire_show_reset_dialog"] = True
             st.rerun()
 
     feedback_message = st.session_state.pop("approved_wire_feedback", None)
