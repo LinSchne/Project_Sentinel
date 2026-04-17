@@ -1,11 +1,39 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
 
 from src.approved_wires import normalize_iban, normalize_text
 from src.fund_name_utils import normalize_fund_name_for_matching
+
+
+GENERIC_FUND_NAME_SUFFIX_WORDS = {
+    "capital",
+    "call",
+    "drawdown",
+    "notice",
+    "distribution",
+    "test",
+}
+
+
+### Remove generic suffix words from a fund name while preserving the original numeral form.
+###############################################################################
+def _strip_generic_fund_name_words(value: str) -> str:
+    cleaned = normalize_text(value).upper()
+    tokens = re.findall(r"[A-Z0-9]+", cleaned)
+    filtered_tokens = [
+        token for token in tokens if token.lower() not in GENERIC_FUND_NAME_SUFFIX_WORDS
+    ]
+    return " ".join(filtered_tokens)
+
+
+### Normalize fund names for loose matching by removing generic suffix words.
+###############################################################################
+def _normalize_fund_name_for_loose_match(value: str) -> str:
+    return normalize_fund_name_for_matching(_strip_generic_fund_name_words(value))
 
 
 ### Match an extracted fund name against the commitment tracker using exact and partial logic.
@@ -16,6 +44,7 @@ def _match_fund_row(commitment_df: pd.DataFrame, fund_name: str) -> dict[str, An
 
     normalized_target = normalize_text(fund_name)
     normalized_numeric_target = normalize_fund_name_for_matching(fund_name)
+    normalized_loose_target = _normalize_fund_name_for_loose_match(fund_name)
     exact_matches = commitment_df[
         commitment_df["Fund Name"].astype(str).apply(normalize_text).eq(normalized_target)
     ]
@@ -37,8 +66,14 @@ def _match_fund_row(commitment_df: pd.DataFrame, fund_name: str) -> dict[str, An
 
     partial_matches = commitment_df[
         commitment_df["Fund Name"].astype(str).apply(
-            lambda value: normalized_target in normalize_text(value)
-            or normalize_text(value) in normalized_target
+            lambda value: (
+                normalized_target in normalize_text(value)
+                or normalize_text(value) in normalized_target
+                or normalized_numeric_target in normalize_fund_name_for_matching(value)
+                or normalize_fund_name_for_matching(value) in normalized_numeric_target
+                or normalized_loose_target in _normalize_fund_name_for_loose_match(value)
+                or _normalize_fund_name_for_loose_match(value) in normalized_loose_target
+            )
         )
     ]
     if not partial_matches.empty:
@@ -162,13 +197,41 @@ def suggest_fund_name_match(
 
     matched_fund = str(matched_row.get("Fund Name", "")).strip()
     match_type = str(matched_row.get("_fund_match_type", ""))
-    if match_type != "numeric_variant":
+    if match_type not in {"numeric_variant", "partial"}:
         return None
 
-    return {
+    stripped_extracted = _strip_generic_fund_name_words(extracted_fund_name)
+    stripped_matched = _strip_generic_fund_name_words(matched_fund)
+    numeric_stripped_extracted = normalize_fund_name_for_matching(stripped_extracted)
+    numeric_stripped_matched = normalize_fund_name_for_matching(stripped_matched)
+
+    has_extra_wording = normalize_text(extracted_fund_name) != normalize_text(stripped_extracted)
+    has_numeric_variant = (
+        normalize_text(stripped_extracted) != normalize_text(stripped_matched)
+        and numeric_stripped_extracted == numeric_stripped_matched
+    )
+
+    hint = {
         "matched_fund": matched_fund,
         "match_type": match_type,
     }
+    if has_extra_wording and has_numeric_variant:
+        hint["message"] = (
+            "The extracted fund name may include extra wording and may also use Arabic numbers "
+            "where the Commitment Tracker uses Roman numerals, or vice versa."
+        )
+    elif has_numeric_variant or match_type == "numeric_variant":
+        hint["message"] = (
+            "The extracted fund name may use Arabic numbers where the Commitment Tracker uses "
+            "Roman numerals, or vice versa."
+        )
+    else:
+        hint["message"] = (
+            "The extracted fund name may include extra wording that is not part of the stored "
+            "Commitment Tracker fund name."
+        )
+
+    return hint
 
 
 ### Validate whether the requested notice amount fits within the remaining open commitment.

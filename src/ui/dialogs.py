@@ -431,9 +431,13 @@ def review_notice_dialog(review_notice, fund_name_hint=None):
     )
 
     if fund_name_hint:
+        hint_message = fund_name_hint.get(
+            "message",
+            "The extracted fund name may differ slightly from the stored Commitment Tracker name.",
+        )
         st.warning(
-            "Fund-name number format check: the extracted fund name may use Arabic numbers "
-            "where the Commitment Tracker uses Roman numerals, or vice versa. "
+            "Fund-name check: "
+            f"{hint_message} "
             f"Please verify the fund name against the tracker entry: {fund_name_hint.get('matched_fund', '-')}"
         )
 

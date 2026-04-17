@@ -176,6 +176,28 @@ If Ollama is unavailable, the app falls back to rule-based extraction.
   <img width="1473" height="711" alt="Executed Capital Calls 3" src="https://github.com/user-attachments/assets/287755c7-ef86-420b-b2ae-3f783d6ea50f" />
 </details>
 
+## Next Steps
+
+The current prototype already covers the main capital call workflow, but several extensions would make it more scalable, collaborative, and production-ready.
+
+1. User Profiles and Role Based Validation  
+   Introduce secure user profiles with username and password access. Validation should be executable by multiple users instead of relying on a single person. Beyond timestamps and last-edited information, the application should maintain a clear audit trail showing who performed which action and when.
+
+2. Database Integration  
+   Extend the application with a database such as MongoDB to store and structure data in a more scalable and reliable way. This would move the prototype beyond file-based handling and support cleaner data organization, better consistency, and easier future development.
+
+3. Transition from a Local LLM to an Enterprise Grade Azure OpenAI Setup  
+   Replace the current local Ollama-based setup with a larger deployed OpenAI model through Azure. This would provide a more scalable and production-ready AI foundation, with stronger performance, better maintainability, and easier enterprise integration.
+
+4. Application Deployment  
+   Deploy the application in a stable and accessible environment so it can be used beyond a purely local prototype setup. This would improve accessibility for multiple users and create a stronger base for scaling, maintenance, and integration into existing business processes.
+
+5. Full Private Equity Investment Cycle Tracking  
+   Expand the prototype so it does not only track capital calls, but also distributions back to us. This would allow the system to reflect the full private equity investment cycle for each Investor / Limited Partner, including the development of contributions and distributions over time and the visualisation of the J-curve.
+
+6. Continuous Improvement Through User Feedback  
+   Establish a structured process to collect user feedback on a regular basis. That feedback should then be used to continuously improve, refine, and expand the prototype based on practical needs and real user experience.
+
 ## Contact
 
 Linus V. Schneeberger  
