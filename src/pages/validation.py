@@ -174,7 +174,7 @@ def render_validation_page() -> None:
 
             approval_allowed = validation_result["overall_status"] == "pass"
             if not approval_allowed:
-                st.warning("Approval is blocked until both checks pass.")
+                st.warning("Approval is blocked until all checks pass.")
 
             action_col1, action_col2, action_col3, action_col4 = st.columns([1, 1, 1, 2])
             with action_col1:
